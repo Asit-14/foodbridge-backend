@@ -10,6 +10,7 @@ const env = require('./config/env');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
 const AppError = require('./utils/AppError');
+const { getStatus: getCronStatus } = require('./services/cronService');
 
 // ── Route imports ──────────────────────────────────
 const authRoutes = require('./routes/auth.routes');
@@ -58,11 +59,32 @@ if (env.isDev) {
 app.use('/api', apiLimiter);
 
 // ── Health check ───────────────────────────────────
-app.get('/api/health', (_req, res) => {
-  res.status(200).json({
-    status: 'ok',
+app.get('/api/health', async (_req, res) => {
+  // Quick DB ping (admin command, <100ms on healthy connection)
+  let dbStatus = 'disconnected';
+  try {
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.connection.db.admin().ping();
+      dbStatus = 'connected';
+    }
+  } catch {
+    dbStatus = 'error';
+  }
+
+  const uptimeSec = Math.floor(process.uptime());
+  const mem = process.memoryUsage();
+
+  res.status(dbStatus === 'connected' ? 200 : 503).json({
+    status: dbStatus === 'connected' ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
+    uptime: `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m ${uptimeSec % 60}s`,
+    database: dbStatus,
+    memory: {
+      rss: `${Math.round(mem.rss / 1048576)}MB`,
+      heapUsed: `${Math.round(mem.heapUsed / 1048576)}MB`,
+    },
+    cron: getCronStatus(),
   });
 });
 

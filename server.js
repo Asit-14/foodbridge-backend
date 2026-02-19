@@ -4,7 +4,7 @@ const connectDB = require('./config/db');
 const env = require('./config/env');
 const logger = require('./utils/logger');
 const initSocket = require('./socket');
-const registerJobs = require('./jobs/scheduler');
+const { startAll: startCron, stopAll: stopCron } = require('./services/cronService');
 
 // ── Create HTTP server (needed for Socket.io) ──────
 const server = http.createServer(app);
@@ -17,8 +17,8 @@ async function start() {
   // 2. Initialize Socket.io
   initSocket(server);
 
-  // 3. Register background cron jobs
-  registerJobs();
+  // 3. Start cron jobs (after DB is ready)
+  startCron();
 
   // 4. Start listening
   server.listen(env.port, () => {
@@ -41,6 +41,10 @@ start().catch((err) => {
 // ── Graceful shutdown ──────────────────────────────
 function shutdown(signal) {
   logger.info(`${signal} received. Shutting down gracefully...`);
+
+  // Stop cron jobs first (prevent new DB writes during shutdown)
+  stopCron();
+
   server.close(() => {
     logger.info('HTTP server closed');
     process.exit(0);
