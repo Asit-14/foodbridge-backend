@@ -138,7 +138,7 @@ exports.register = catchAsync(async (req, res, next) => {
 
   // Send verification email
   try {
-    const verificationUrl = `${env.client.url}/verify-email/${verificationToken}`;
+    const verificationUrl = `${env.client.url.replace(/\/+$/, '')}/verify-email/${verificationToken}`;
     await sendEmailVerification(user, verificationUrl);
     
     logger.info(`Registration: Verification email sent to ${user.email}`);
@@ -299,7 +299,7 @@ exports.resendVerification = catchAsync(async (req, res, next) => {
 
   // Send verification email
   try {
-    const verificationUrl = `${env.client.url}/verify-email/${verificationToken}`;
+    const verificationUrl = `${env.client.url.replace(/\/+$/, '')}/verify-email/${verificationToken}`;
     await sendEmailVerification(user, verificationUrl);
   } catch (err) {
     user.emailVerificationToken = undefined;
@@ -390,7 +390,7 @@ exports.forgotPassword = catchAsync(async (req, res, next) => {
 
   // Send password reset email
   try {
-    const resetUrl = `${env.client.url}/reset-password/${resetToken}`;
+    const resetUrl = `${env.client.url.replace(/\/+$/, '')}/reset-password/${resetToken}`;
     await sendPasswordResetEmail(user, resetUrl);
     
     logger.info(`Password reset requested for ${email}`);
