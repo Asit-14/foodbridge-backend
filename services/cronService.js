@@ -6,6 +6,7 @@ const { findBestNGO } = require('./matchingService');
 const { notify, broadcast } = require('./notificationService');
 const { recalculateAllScores } = require('./reliabilityEngine');
 const logger = require('../utils/logger');
+const { STATUS, PICKUP_STATUS, MAX_REASSIGN_ATTEMPTS, STALE_PICKUP_WINDOW_MS } = require('../utils/constants');
 
 // ═══════════════════════════════════════════════════════
 //  JOB REGISTRY — tracks state for health/status endpoint
@@ -14,10 +15,10 @@ const logger = require('../utils/logger');
 const jobs = {};
 
 /**
- * Register a cron job with state tracking.
+ * Register a cron job with state tracking and optional timeout.
  * Jobs are registered in "stopped" state — call startAll() to begin.
  */
-function registerJob(name, schedule, handler) {
+function registerJob(name, schedule, handler, { timeoutMs } = {}) {
   const task = cron.schedule(schedule, async () => {
     const start = Date.now();
     jobs[name].lastRunAt = new Date();
@@ -25,7 +26,14 @@ function registerJob(name, schedule, handler) {
     jobs[name].runCount += 1;
 
     try {
-      const result = await handler();
+      let resultPromise = handler();
+      if (timeoutMs) {
+        const timeout = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Job "${name}" timed out after ${timeoutMs}ms`)), timeoutMs)
+        );
+        resultPromise = Promise.race([resultPromise, timeout]);
+      }
+      const result = await resultPromise;
       jobs[name].status = 'idle';
       jobs[name].lastDurationMs = Date.now() - start;
       jobs[name].lastError = null;
@@ -57,8 +65,8 @@ function registerJob(name, schedule, handler) {
 registerJob('expire-donations', '* * * * *', async () => {
   const now = new Date();
   const result = await Donation.updateMany(
-    { status: 'Available', expiryTime: { $lte: now } },
-    { status: 'Expired' }
+    { status: STATUS.AVAILABLE, expiryTime: { $lte: now } },
+    { status: STATUS.EXPIRED }
   );
 
   if (result.modifiedCount > 0) {
@@ -76,9 +84,9 @@ registerJob('expire-donations', '* * * * *', async () => {
 // ═══════════════════════════════════════════════════════
 
 registerJob('reassign-stale', '*/5 * * * *', async () => {
-  const cutoff = new Date(Date.now() - 20 * 60 * 1000);
+  const cutoff = new Date(Date.now() - STALE_PICKUP_WINDOW_MS);
   const stale = await Donation.find({
-    status: 'Accepted',
+    status: STATUS.ACCEPTED,
     acceptedAt: { $lte: cutoff },
   });
 
@@ -86,19 +94,19 @@ registerJob('reassign-stale', '*/5 * * * *', async () => {
 
   let reassigned = 0;
   let expired = 0;
+  const ngoPenalties = new Map();
 
   for (const donation of stale) {
     try {
       if (donation.acceptedBy) {
-        // Penalize delinquent NGO (-5 reliability)
-        await User.findByIdAndUpdate(donation.acceptedBy, {
-          $inc: { reliabilityScore: -5 },
-        });
+        // Accumulate penalty for bulk update (avoids N+1)
+        const ngoIdStr = donation.acceptedBy.toString();
+        ngoPenalties.set(ngoIdStr, (ngoPenalties.get(ngoIdStr) || 0) - 5);
 
         // Mark pickup log as failed
         await PickupLog.findOneAndUpdate(
-          { donationId: donation._id, ngoId: donation.acceptedBy, status: 'in_progress' },
-          { status: 'failed', failureReason: 'No pickup within 20-minute window' }
+          { donationId: donation._id, ngoId: donation.acceptedBy, status: PICKUP_STATUS.IN_PROGRESS },
+          { status: PICKUP_STATUS.FAILED, failureReason: 'No pickup within 20-minute window' }
         );
 
         // Notify delinquent NGO
@@ -121,30 +129,30 @@ registerJob('reassign-stale', '*/5 * * * *', async () => {
 
       donation.reassignCount += 1;
 
-      if (donation.reassignCount >= 3) {
+      if (donation.reassignCount >= MAX_REASSIGN_ATTEMPTS) {
         // Max reassigns reached — expire the donation
-        donation.status = 'Expired';
+        donation.status = STATUS.EXPIRED;
         await donation.save();
 
         await notify({
           recipientId: donation.donorId.toString(),
           type: 'donation_expired',
           title: 'Donation Expired',
-          message: `"${donation.foodType}" expired after 3 failed pickup attempts.`,
+          message: `"${donation.foodType}" expired after ${MAX_REASSIGN_ATTEMPTS} failed pickup attempts.`,
           data: { donationId: donation._id },
         });
 
         broadcast(`donation:${donation._id}`, 'donation-status-update', {
           donationId: donation._id,
-          status: 'Expired',
+          status: STATUS.EXPIRED,
           reason: 'max_reassigns',
         });
 
         expired++;
-        logger.info(`Cron [reassign-stale]: donation ${donation._id} expired (3 reassigns)`);
+        logger.info(`Cron [reassign-stale]: donation ${donation._id} expired (${MAX_REASSIGN_ATTEMPTS} reassigns)`);
       } else {
         // Reset to Available and re-match
-        donation.status = 'Available';
+        donation.status = STATUS.AVAILABLE;
         donation.acceptedBy = null;
         donation.acceptedAt = null;
         await donation.save();
@@ -153,7 +161,7 @@ registerJob('reassign-stale', '*/5 * * * *', async () => {
           recipientId: donation.donorId.toString(),
           type: 'donation_reassigned',
           title: 'Finding New NGO',
-          message: `"${donation.foodType}" is being matched to another NGO (attempt ${donation.reassignCount}/3).`,
+          message: `"${donation.foodType}" is being matched to another NGO (attempt ${donation.reassignCount}/${MAX_REASSIGN_ATTEMPTS}).`,
           data: { donationId: donation._id },
         });
 
@@ -188,8 +196,19 @@ registerJob('reassign-stale', '*/5 * * * *', async () => {
     }
   }
 
+  // Bulk update NGO reliability scores (avoids N+1 queries)
+  if (ngoPenalties.size > 0) {
+    const bulkOps = Array.from(ngoPenalties.entries()).map(([ngoId, penalty]) => ({
+      updateOne: {
+        filter: { _id: ngoId },
+        update: { $inc: { reliabilityScore: penalty } },
+      },
+    }));
+    await User.bulkWrite(bulkOps);
+  }
+
   return { reassigned, expired };
-});
+}, { timeoutMs: 4 * 60 * 1000 });
 
 // ═══════════════════════════════════════════════════════
 //  JOB C — Daily NGO reliability recalculation (midnight)
@@ -206,7 +225,7 @@ registerJob('reliability-recalc', '0 0 * * *', async () => {
   const count = await recalculateAllScores();
   logger.info(`Cron [reliability-recalc]: updated ${count} NGO scores`);
   return { ngosUpdated: count };
-});
+}, { timeoutMs: 5 * 60 * 1000 });
 
 // ═══════════════════════════════════════════════════════
 //  JOB D — Clean expired password-reset & email-verification

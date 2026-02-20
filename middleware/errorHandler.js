@@ -17,16 +17,17 @@ const env = require('../config/env');
  * Must have 4 params so Express recognizes it as an error handler.
  */
 // eslint-disable-next-line no-unused-vars
-const errorHandler = (err, _req, res, _next) => {
+const errorHandler = (err, req, res, _next) => {
   // Default values
   err.statusCode = err.statusCode || 500;
   err.status = err.status || 'error';
 
-  // ── Log ──────────────────────────────────────────
+  // ── Log with correlation ID ────────────────────────
+  const reqId = req.id || 'unknown';
   if (err.statusCode >= 500) {
-    logger.error(`${err.statusCode} — ${err.message}`, { stack: err.stack });
+    logger.error(`[${reqId}] ${err.statusCode} — ${err.message}`, { stack: err.stack, requestId: reqId });
   } else {
-    logger.warn(`${err.statusCode} — ${err.message}`);
+    logger.warn(`[${reqId}] ${err.statusCode} — ${err.message}`, { requestId: reqId });
   }
 
   // ── Development: send full error ─────────────────

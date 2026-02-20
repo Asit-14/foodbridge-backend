@@ -4,6 +4,10 @@ const validate = require('../middleware/validate');
 const { authLimiter, strictAuthLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 const { protect } = require('../middleware/auth');
 const ctrl = require('../controllers/authController');
+const {
+  password, newPassword, confirmPassword, currentPassword,
+  hexToken, customValidators,
+} = require('../utils/validators');
 
 const router = Router();
 
@@ -14,35 +18,9 @@ const router = Router();
  * ║  All authentication endpoints with:                          ║
  * ║  - Input validation using express-validator                  ║
  * ║  - Rate limiting per endpoint type                          ║
- * ║  - Strong password requirements                             ║
+ * ║  - Strong password requirements (from utils/validators)     ║
  * ╚══════════════════════════════════════════════════════════════╝
  */
-
-// ── Password validation rules ──────────────────────
-
-const passwordRules = body('password')
-  .notEmpty().withMessage('Password is required')
-  .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-  .isLength({ max: 128 }).withMessage('Password must not exceed 128 characters')
-  .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
-  .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
-  .matches(/\d/).withMessage('Password must contain at least one number')
-  .matches(/[!@#$%^&*(),.?":{}|<>]/).withMessage('Password must contain at least one special character')
-  .not().matches(/\s/).withMessage('Password must not contain spaces')
-  .custom((value, { req }) => {
-    // Check password doesn't contain email or name
-    const email = req.body.email?.toLowerCase() || '';
-    const name = req.body.name?.toLowerCase() || '';
-    const lowerPassword = value.toLowerCase();
-    
-    if (email && lowerPassword.includes(email.split('@')[0])) {
-      throw new Error('Password must not contain your email');
-    }
-    if (name && name.length > 3 && lowerPassword.includes(name)) {
-      throw new Error('Password must not contain your name');
-    }
-    return true;
-  });
 
 // ── Validation chains ──────────────────────────────
 
@@ -61,7 +39,7 @@ const registerValidation = [
       gmail_remove_dots: false, // Preserve dots in gmail addresses
       gmail_remove_subaddress: false,
     }),
-  passwordRules,
+  password().custom(customValidators.noPersonalInfo),
   body('role')
     .notEmpty().withMessage('Role is required')
     .isIn(['donor', 'ngo']).withMessage('Role must be donor or ngo'),
@@ -106,51 +84,17 @@ const emailValidation = [
     .normalizeEmail(),
 ];
 
-const tokenParamValidation = [
-  param('token')
-    .trim()
-    .notEmpty().withMessage('Token is required')
-    .isLength({ min: 64, max: 64 }).withMessage('Invalid token format')
-    .isHexadecimal().withMessage('Invalid token format'),
-];
+const tokenParamValidation = [hexToken('param')];
 
 const resetPasswordValidation = [
   ...tokenParamValidation,
-  body('password')
-    .notEmpty().withMessage('Password is required')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .isLength({ max: 128 }).withMessage('Password must not exceed 128 characters')
-    .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
-    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
-    .matches(/\d/).withMessage('Password must contain at least one number')
-    .matches(/[!@#$%^&*(),.?":{}|<>]/).withMessage('Password must contain at least one special character'),
+  password(),
 ];
 
 const changePasswordValidation = [
-  body('currentPassword')
-    .notEmpty().withMessage('Current password is required'),
-  body('newPassword')
-    .notEmpty().withMessage('New password is required')
-    .isLength({ min: 8 }).withMessage('New password must be at least 8 characters')
-    .isLength({ max: 128 }).withMessage('New password must not exceed 128 characters')
-    .matches(/[a-z]/).withMessage('New password must contain at least one lowercase letter')
-    .matches(/[A-Z]/).withMessage('New password must contain at least one uppercase letter')
-    .matches(/\d/).withMessage('New password must contain at least one number')
-    .matches(/[!@#$%^&*(),.?":{}|<>]/).withMessage('New password must contain at least one special character')
-    .custom((value, { req }) => {
-      if (value === req.body.currentPassword) {
-        throw new Error('New password must be different from current password');
-      }
-      return true;
-    }),
-  body('confirmPassword')
-    .notEmpty().withMessage('Password confirmation is required')
-    .custom((value, { req }) => {
-      if (value !== req.body.newPassword) {
-        throw new Error('Passwords do not match');
-      }
-      return true;
-    }),
+  currentPassword,
+  newPassword,
+  confirmPassword,
 ];
 
 const profileUpdateValidation = [

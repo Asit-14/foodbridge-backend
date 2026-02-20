@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const { ROLES } = require('../utils/constants');
 
 /**
  * ╔══════════════════════════════════════════════════════════════╗
@@ -15,7 +16,6 @@ const crypto = require('crypto');
  * ╚══════════════════════════════════════════════════════════════╝
  */
 
-const ROLES = ['donor', 'ngo', 'admin'];
 
 // ── Constants ──────────────────────────────────────
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -80,6 +80,36 @@ const userSchema = new mongoose.Schema(
     address: {
       type: String,
       trim: true,
+    },
+    // ── Structured Location ───────────────────────────
+    city: {
+      type: String,
+      trim: true,
+    },
+    state: {
+      type: String,
+      trim: true,
+    },
+    country: {
+      type: String,
+      trim: true,
+      default: 'India',
+    },
+    citySlug: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      index: true,
+    },
+    stateCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+    },
+    regionCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
     },
     reliabilityScore: {
       type: Number,
@@ -161,6 +191,9 @@ const userSchema = new mongoose.Schema(
 userSchema.index({ role: 1 });
 userSchema.index({ location: '2dsphere' });
 userSchema.index({ role: 1, isActive: 1, isVerified: 1 }); // matching engine NGO lookup
+userSchema.index({ role: 1, isActive: 1, isVerified: 1, citySlug: 1 }); // city-based NGO matching
+userSchema.index({ citySlug: 1, role: 1 }); // city analytics
+userSchema.index({ stateCode: 1, role: 1 }); // state-level expansion
 userSchema.index({ emailVerificationToken: 1 });
 userSchema.index({ passwordResetToken: 1 });
 

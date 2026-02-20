@@ -4,6 +4,7 @@ const validate = require('../middleware/validate');
 const { protect } = require('../middleware/auth');
 const authorize = require('../middleware/role');
 const ctrl = require('../controllers/donationController');
+const { FOOD_CATEGORIES, UNITS } = require('../utils/constants');
 
 const router = Router();
 
@@ -15,14 +16,14 @@ const createDonationValidation = [
     .notEmpty().withMessage('Food type is required'),
   body('category')
     .optional()
-    .isIn(['cooked_meal', 'raw_ingredients', 'packaged', 'bakery', 'beverages', 'mixed'])
+    .isIn(FOOD_CATEGORIES)
     .withMessage('Invalid food category'),
   body('quantity')
     .notEmpty().withMessage('Quantity is required')
     .isInt({ min: 1 }).withMessage('Quantity must be at least 1'),
   body('unit')
     .optional()
-    .isIn(['servings', 'kg', 'packets', 'trays'])
+    .isIn(UNITS)
     .withMessage('Invalid unit'),
   body('expiryTime')
     .notEmpty().withMessage('Expiry time is required')

@@ -1,25 +1,5 @@
 const mongoose = require('mongoose');
-
-const STATUSES = ['Available', 'Accepted', 'PickedUp', 'Delivered', 'Expired', 'Cancelled'];
-
-const FOOD_CATEGORIES = [
-  'cooked_meal',
-  'raw_ingredients',
-  'packaged',
-  'bakery',
-  'beverages',
-  'mixed',
-];
-
-// ── Category-specific max shelf life (hours) ───────
-const SHELF_LIFE = {
-  cooked_meal: 6,
-  raw_ingredients: 24,
-  packaged: 48,
-  bakery: 12,
-  beverages: 24,
-  mixed: 6,
-};
+const { DONATION_STATUSES, FOOD_CATEGORIES, SHELF_LIFE, VALID_TRANSITIONS } = require('../utils/constants');
 
 // ── GeoJSON Point ──────────────────────────────────
 const pointSchema = new mongoose.Schema(
@@ -102,10 +82,35 @@ const donationSchema = new mongoose.Schema(
       maxlength: 300,
     },
 
+    // ── Structured Location ──
+    city: {
+      type: String,
+      trim: true,
+    },
+    state: {
+      type: String,
+      trim: true,
+    },
+    country: {
+      type: String,
+      trim: true,
+      default: 'India',
+    },
+    citySlug: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
+    stateCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+    },
+
     // ── Lifecycle ──
     status: {
       type: String,
-      enum: STATUSES,
+      enum: DONATION_STATUSES,
       default: 'Available',
       index: true,
     },
@@ -162,6 +167,10 @@ donationSchema.index({ acceptedBy: 1, status: 1 });
 donationSchema.index({ createdAt: -1 });
 donationSchema.index({ status: 1, createdAt: -1 });      // heatmap & trend queries
 donationSchema.index({ category: 1, status: 1 });         // category analytics
+donationSchema.index({ citySlug: 1, status: 1 });          // city-based filtering
+donationSchema.index({ stateCode: 1, status: 1 });         // state-level analytics
+donationSchema.index({ citySlug: 1, status: 1, createdAt: -1 }); // city analytics with time
+donationSchema.index({ 'reassignHistory.ngoId': 1 });
 
 // ── Virtual: is expired ───────────────────────────
 donationSchema.virtual('isExpired').get(function () {
@@ -195,20 +204,11 @@ donationSchema.methods.validateExpiry = function () {
   return { valid: true };
 };
 
-// ── Static: valid status transitions ──────────────
-const VALID_TRANSITIONS = {
-  Available: ['Accepted', 'Expired', 'Cancelled'],
-  Accepted: ['PickedUp', 'Available', 'Expired'],  // Available = reassign
-  PickedUp: ['Delivered'],
-  Delivered: [],
-  Expired: [],
-  Cancelled: [],
-};
 
 donationSchema.methods.canTransitionTo = function (newStatus) {
   return VALID_TRANSITIONS[this.status]?.includes(newStatus) || false;
 };
 
 module.exports = mongoose.model('Donation', donationSchema);
-module.exports.STATUSES = STATUSES;
+module.exports.STATUSES = DONATION_STATUSES;
 module.exports.VALID_TRANSITIONS = VALID_TRANSITIONS;

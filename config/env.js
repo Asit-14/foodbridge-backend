@@ -59,4 +59,14 @@ for (const key of required) {
   }
 }
 
+// ── Validate JWT secret strength ────────────────
+if (env.jwt.secret.length < 32) {
+  console.error('FATAL: JWT_SECRET must be at least 32 characters. Generate with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
+  process.exit(1);
+}
+if (env.jwt.refreshSecret.length < 32) {
+  console.error('FATAL: JWT_REFRESH_SECRET must be at least 32 characters.');
+  process.exit(1);
+}
+
 module.exports = env;

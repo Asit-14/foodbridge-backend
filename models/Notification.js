@@ -1,15 +1,6 @@
 const mongoose = require('mongoose');
+const { NOTIFICATION_TYPES } = require('../utils/constants');
 
-const NOTIFICATION_TYPES = [
-  'new_donation_nearby',
-  'donation_accepted',
-  'pickup_confirmed',
-  'delivery_confirmed',
-  'donation_expired',
-  'donation_reassigned',
-  'ngo_verified',
-  'system_alert',
-];
 
 const notificationSchema = new mongoose.Schema(
   {

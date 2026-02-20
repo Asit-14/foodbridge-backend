@@ -3,17 +3,14 @@ const PickupLog = require('../models/PickupLog');
 const User = require('../models/User');
 const AppError = require('../utils/AppError');
 const catchAsync = require('../utils/catchAsync');
+const { generateOTP } = require('../utils/cryptoUtils');
 const { findBestNGO } = require('../services/matchingService');
 const { notify, broadcast } = require('../services/notificationService');
 const { assessExpiryRisk } = require('../services/expiryRisk');
 const { sendDonationAcceptedEmail, sendOTPEmail, sendDeliveryConfirmationEmail } = require('../services/emailService');
-
-// ── Helpers ────────────────────────────────────────
-
-/** Generate a 4-digit OTP for pickup verification */
-function generateOTP() {
-  return Math.floor(1000 + Math.random() * 9000).toString();
-}
+const ERRORS = require('../utils/errorMessages');
+const logger = require('../utils/logger');
+const { STATUS, ROLE } = require('../utils/constants');
 
 // ── Controllers ────────────────────────────────────
 
@@ -27,6 +24,13 @@ exports.createDonation = catchAsync(async (req, res, next) => {
     preparedAt, expiryTime, pickupDeadline,
     location, pickupAddress, contactPhone, specialInstructions,
   } = req.body;
+
+  // Inherit city/state from donor profile if not provided
+  const city = req.body.city || req.user.city;
+  const state = req.body.state || req.user.state;
+  const country = req.body.country || req.user.country || 'India';
+  const citySlug = req.body.citySlug || req.user.citySlug;
+  const stateCode = req.body.stateCode || req.user.stateCode;
 
   const donation = new Donation({
     donorId: req.user._id,
@@ -42,6 +46,11 @@ exports.createDonation = catchAsync(async (req, res, next) => {
     pickupAddress,
     contactPhone: contactPhone || req.user.phone,
     specialInstructions,
+    city,
+    state,
+    country,
+    citySlug,
+    stateCode,
   });
 
   // Server-side food-safety validation
@@ -87,12 +96,17 @@ exports.createDonation = catchAsync(async (req, res, next) => {
  * List donations with filtering, pagination.
  */
 exports.getDonations = catchAsync(async (req, res) => {
-  const { status, category, city, page = 1, limit = 20 } = req.query;
+  const { status, category, city, citySlug, stateCode, page = 1, limit = 20 } = req.query;
   const filter = {};
 
   if (status) filter.status = status;
   if (category) filter.category = category;
-  if (city) filter.pickupAddress = { $regex: city, $options: 'i' };
+  if (citySlug) {
+    filter.citySlug = citySlug;
+  } else if (city) {
+    filter.pickupAddress = { $regex: city, $options: 'i' };
+  }
+  if (stateCode) filter.stateCode = stateCode;
 
   const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
@@ -124,11 +138,11 @@ exports.getNearbyDonations = catchAsync(async (req, res, next) => {
   const { lat, lng, radius = 5 } = req.query;
 
   if (!lat || !lng) {
-    return next(new AppError('Please provide lat and lng query parameters.', 400));
+    return next(new AppError(ERRORS.MISSING_COORDINATES, 400));
   }
 
   const donations = await Donation.find({
-    status: 'Available',
+    status: STATUS.AVAILABLE,
     expiryTime: { $gt: new Date() },
     location: {
       $nearSphere: {
@@ -159,7 +173,7 @@ exports.getDonation = catchAsync(async (req, res, next) => {
     .populate('acceptedBy', 'name organizationName phone');
 
   if (!donation) {
-    return next(new AppError('Donation not found.', 404));
+    return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
   }
 
   res.status(200).json({
@@ -191,22 +205,22 @@ exports.getMyDonations = catchAsync(async (req, res) => {
 exports.acceptDonation = catchAsync(async (req, res, next) => {
   const donation = await Donation.findById(req.params.id);
 
-  if (!donation) return next(new AppError('Donation not found.', 404));
+  if (!donation) return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
 
-  if (!donation.canTransitionTo('Accepted')) {
+  if (!donation.canTransitionTo(STATUS.ACCEPTED)) {
     return next(
-      new AppError(`Cannot accept a donation with status "${donation.status}".`, 400)
+      new AppError(ERRORS.INVALID_STATUS_TRANSITION(donation.status), 400)
     );
   }
 
   // Check expiry safety margin
   const minsUntilExpiry = (new Date(donation.expiryTime) - Date.now()) / 60000;
   if (minsUntilExpiry < 15) {
-    return next(new AppError('Donation is too close to expiry to accept safely.', 400));
+    return next(new AppError(ERRORS.TOO_CLOSE_TO_EXPIRY, 400));
   }
 
   // Update donation
-  donation.status = 'Accepted';
+  donation.status = STATUS.ACCEPTED;
   donation.acceptedBy = req.user._id;
   donation.acceptedAt = new Date();
   await donation.save();
@@ -216,7 +230,7 @@ exports.acceptDonation = catchAsync(async (req, res, next) => {
     donationId: donation._id,
     ngoId: req.user._id,
     donorId: donation.donorId,
-    pickupOTP: generateOTP(),
+    pickupOTP: generateOTP(4),
   });
 
   // Notify donor
@@ -231,14 +245,14 @@ exports.acceptDonation = catchAsync(async (req, res, next) => {
   // Send email to donor with OTP and acceptance info
   const donor = await User.findById(donation.donorId);
   if (donor) {
-    sendDonationAcceptedEmail(donor, req.user, donation).catch(() => {});
-    sendOTPEmail(donor, donation, pickupLog.pickupOTP).catch(() => {});
+    sendDonationAcceptedEmail(donor, req.user, donation).catch((err) => logger.error('Email send failed:', err.message));
+    sendOTPEmail(donor, donation, pickupLog.pickupOTP).catch((err) => logger.error('Email send failed:', err.message));
   }
 
   // Emit to donation room for any listeners
   broadcast(`donation:${donation._id}`, 'donation-status-update', {
     donationId: donation._id,
-    status: 'Accepted',
+    status: STATUS.ACCEPTED,
     acceptedBy: req.user._id,
   });
 
@@ -254,17 +268,17 @@ exports.acceptDonation = catchAsync(async (req, res, next) => {
  */
 exports.pickupDonation = catchAsync(async (req, res, next) => {
   const donation = await Donation.findById(req.params.id);
-  if (!donation) return next(new AppError('Donation not found.', 404));
+  if (!donation) return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
 
-  if (!donation.canTransitionTo('PickedUp')) {
+  if (!donation.canTransitionTo(STATUS.PICKED_UP)) {
     return next(
-      new AppError(`Cannot pick up a donation with status "${donation.status}".`, 400)
+      new AppError(ERRORS.INVALID_STATUS_TRANSITION(donation.status), 400)
     );
   }
 
   // Verify the NGO is the one who accepted
   if (donation.acceptedBy.toString() !== req.user._id.toString()) {
-    return next(new AppError('Only the accepting NGO can pick up this donation.', 403));
+    return next(new AppError(ERRORS.ONLY_ACCEPTING_NGO, 403));
   }
 
   // OTP verification
@@ -275,10 +289,10 @@ exports.pickupDonation = catchAsync(async (req, res, next) => {
     status: 'in_progress',
   }).select('+pickupOTP');
 
-  if (!pickupLog) return next(new AppError('Pickup log not found.', 404));
+  if (!pickupLog) return next(new AppError(ERRORS.PICKUP_LOG_NOT_FOUND, 404));
 
   if (pickupLog.pickupOTP !== otp) {
-    return next(new AppError('Invalid OTP. Please check with the donor.', 400));
+    return next(new AppError(ERRORS.INVALID_OTP, 400));
   }
 
   // Update pickup log
@@ -288,7 +302,7 @@ exports.pickupDonation = catchAsync(async (req, res, next) => {
   await pickupLog.save();
 
   // Update donation
-  donation.status = 'PickedUp';
+  donation.status = STATUS.PICKED_UP;
   donation.pickedUpAt = new Date();
   await donation.save();
 
@@ -303,7 +317,7 @@ exports.pickupDonation = catchAsync(async (req, res, next) => {
 
   broadcast(`donation:${donation._id}`, 'donation-status-update', {
     donationId: donation._id,
-    status: 'PickedUp',
+    status: STATUS.PICKED_UP,
   });
 
   res.status(200).json({
@@ -318,16 +332,16 @@ exports.pickupDonation = catchAsync(async (req, res, next) => {
  */
 exports.deliverDonation = catchAsync(async (req, res, next) => {
   const donation = await Donation.findById(req.params.id);
-  if (!donation) return next(new AppError('Donation not found.', 404));
+  if (!donation) return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
 
-  if (!donation.canTransitionTo('Delivered')) {
+  if (!donation.canTransitionTo(STATUS.DELIVERED)) {
     return next(
-      new AppError(`Cannot deliver a donation with status "${donation.status}".`, 400)
+      new AppError(ERRORS.INVALID_STATUS_TRANSITION(donation.status), 400)
     );
   }
 
   if (donation.acceptedBy.toString() !== req.user._id.toString()) {
-    return next(new AppError('Only the accepting NGO can mark delivery.', 403));
+    return next(new AppError(ERRORS.ONLY_ACCEPTING_NGO, 403));
   }
 
   const { beneficiaryCount, deliveryNotes } = req.body;
@@ -347,7 +361,7 @@ exports.deliverDonation = catchAsync(async (req, res, next) => {
   }
 
   // Update donation
-  donation.status = 'Delivered';
+  donation.status = STATUS.DELIVERED;
   donation.deliveredAt = new Date();
   await donation.save();
 
@@ -368,11 +382,11 @@ exports.deliverDonation = catchAsync(async (req, res, next) => {
   // Send delivery confirmation email
   const deliveryDonor = await User.findById(donation.donorId);
   if (deliveryDonor) {
-    sendDeliveryConfirmationEmail(deliveryDonor, donation, beneficiaryCount).catch(() => {});
+    sendDeliveryConfirmationEmail(deliveryDonor, donation, beneficiaryCount).catch((err) => logger.error('Email send failed:', err.message));
   }
 
   // Notify admins
-  const admins = await User.find({ role: 'admin' }, '_id');
+  const admins = await User.find({ role: ROLE.ADMIN }, '_id');
   for (const admin of admins) {
     await notify({
       recipientId: admin._id.toString(),
@@ -385,7 +399,7 @@ exports.deliverDonation = catchAsync(async (req, res, next) => {
 
   broadcast(`donation:${donation._id}`, 'donation-status-update', {
     donationId: donation._id,
-    status: 'Delivered',
+    status: STATUS.DELIVERED,
   });
 
   res.status(200).json({
@@ -400,7 +414,7 @@ exports.deliverDonation = catchAsync(async (req, res, next) => {
  */
 exports.getMatchSuggestions = catchAsync(async (req, res, next) => {
   const donation = await Donation.findById(req.params.id);
-  if (!donation) return next(new AppError('Donation not found.', 404));
+  if (!donation) return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
 
   const matches = await findBestNGO(donation._id);
 
@@ -417,7 +431,7 @@ exports.getMatchSuggestions = catchAsync(async (req, res, next) => {
  */
 exports.getExpiryRisk = catchAsync(async (req, res, next) => {
   const donation = await Donation.findById(req.params.id);
-  if (!donation) return next(new AppError('Donation not found.', 404));
+  if (!donation) return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
 
   const transportKm = parseFloat(req.query.transportKm) || 0;
   const risk = assessExpiryRisk(donation, transportKm);
@@ -434,14 +448,14 @@ exports.getExpiryRisk = catchAsync(async (req, res, next) => {
  */
 exports.editDonation = catchAsync(async (req, res, next) => {
   const donation = await Donation.findById(req.params.id);
-  if (!donation) return next(new AppError('Donation not found.', 404));
+  if (!donation) return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
 
   if (donation.donorId.toString() !== req.user._id.toString()) {
-    return next(new AppError('Only the donor can edit their donation.', 403));
+    return next(new AppError(ERRORS.ONLY_DONOR_CAN_EDIT, 403));
   }
 
-  if (donation.status !== 'Available') {
-    return next(new AppError('Can only edit donations with status "Available".', 400));
+  if (donation.status !== STATUS.AVAILABLE) {
+    return next(new AppError(ERRORS.EDIT_ONLY_AVAILABLE, 400));
   }
 
   const editableFields = [
@@ -487,25 +501,25 @@ exports.editDonation = catchAsync(async (req, res, next) => {
  */
 exports.cancelDonation = catchAsync(async (req, res, next) => {
   const donation = await Donation.findById(req.params.id);
-  if (!donation) return next(new AppError('Donation not found.', 404));
+  if (!donation) return next(new AppError(ERRORS.DONATION_NOT_FOUND, 404));
 
   // Only the donor who created it can cancel
   if (donation.donorId.toString() !== req.user._id.toString()) {
-    return next(new AppError('Only the donor can cancel their donation.', 403));
+    return next(new AppError(ERRORS.ONLY_DONOR_CAN_CANCEL, 403));
   }
 
-  if (!donation.canTransitionTo('Cancelled')) {
+  if (!donation.canTransitionTo(STATUS.CANCELLED)) {
     return next(
-      new AppError(`Cannot cancel a donation with status "${donation.status}". Only Available donations can be cancelled.`, 400)
+      new AppError(ERRORS.CANCEL_ONLY_AVAILABLE(donation.status), 400)
     );
   }
 
-  donation.status = 'Cancelled';
+  donation.status = STATUS.CANCELLED;
   await donation.save();
 
   broadcast(`donation:${donation._id}`, 'donation-status-update', {
     donationId: donation._id,
-    status: 'Cancelled',
+    status: STATUS.CANCELLED,
   });
 
   res.status(200).json({

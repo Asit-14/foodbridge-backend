@@ -17,6 +17,8 @@ const {
   sendPasswordResetEmail,
   sendPasswordChangedEmail,
 } = require('../services/emailService');
+const ERRORS = require('../utils/errorMessages');
+const { ROLE } = require('../utils/constants');
 
 /**
  * ╔══════════════════════════════════════════════════════════════╗
@@ -78,26 +80,32 @@ async function sendTokenResponse(user, statusCode, res, options = {}) {
  * Register a new user with email verification
  */
 exports.register = catchAsync(async (req, res, next) => {
-  const { 
-    name, 
-    email, 
-    password, 
-    role, 
-    phone, 
-    organizationName, 
-    location, 
-    address 
+  const {
+    name,
+    email,
+    password,
+    role,
+    phone,
+    organizationName,
+    location,
+    address,
+    city,
+    state,
+    country,
+    citySlug,
+    stateCode,
+    regionCode,
   } = req.body;
 
   // Prevent self-registration as admin
-  if (role === 'admin') {
-    return next(new AppError('Admin accounts cannot be self-registered.', 403));
+  if (role === ROLE.ADMIN) {
+    return next(new AppError(ERRORS.ADMIN_SELF_REGISTER, 403));
   }
 
   // Check if user already exists
   const existingUser = await User.findOne({ email });
   if (existingUser) {
-    return next(new AppError('An account with this email already exists.', 409));
+    return next(new AppError(ERRORS.EMAIL_EXISTS, 409));
   }
 
   // Create user
@@ -110,7 +118,13 @@ exports.register = catchAsync(async (req, res, next) => {
     organizationName,
     location,
     address,
-    isVerified: role === 'donor', // NGOs need admin verification
+    city,
+    state,
+    country: country || 'India',
+    citySlug,
+    stateCode,
+    regionCode,
+    isVerified: role === ROLE.DONOR, // NGOs need admin verification
     isEmailVerified: false,
   });
 
@@ -130,7 +144,7 @@ exports.register = catchAsync(async (req, res, next) => {
   }
 
   // Send welcome email (non-blocking)
-  sendWelcomeEmail(user).catch(() => {});
+  sendWelcomeEmail(user).catch((err) => logger.error('Email send failed:', err.message));
 
   // Don't auto-login, require email verification first
   res.status(201).json({
@@ -161,7 +175,7 @@ exports.login = catchAsync(async (req, res, next) => {
 
   // Check if user exists
   if (!user) {
-    return next(new AppError('Invalid email or password.', 401));
+    return next(new AppError(ERRORS.INVALID_CREDENTIALS, 401));
   }
 
   // Check if account is locked
@@ -187,10 +201,7 @@ exports.login = catchAsync(async (req, res, next) => {
     if (attemptsRemaining <= 0) {
       logger.warn(`Login: Account locked for ${email} after ${User.MAX_LOGIN_ATTEMPTS} failed attempts`);
       return next(
-        new AppError(
-          'Account locked due to too many failed attempts. Try again later.',
-          423
-        )
+        new AppError(ERRORS.ACCOUNT_LOCKED_ATTEMPTS, 423)
       );
     }
     
@@ -204,16 +215,13 @@ exports.login = catchAsync(async (req, res, next) => {
 
   // Check if account is active
   if (!user.isActive) {
-    return next(new AppError('Account has been deactivated. Contact support.', 403));
+    return next(new AppError(ERRORS.ACCOUNT_DEACTIVATED, 403));
   }
 
   // Check email verification (optional - can be made required)
   if (!user.isEmailVerified && env.isProd) {
     return next(
-      new AppError(
-        'Please verify your email address before logging in.',
-        403
-      )
+      new AppError(ERRORS.EMAIL_NOT_VERIFIED, 403)
     );
   }
 
@@ -234,7 +242,7 @@ exports.verifyEmail = catchAsync(async (req, res, next) => {
 
   if (!user) {
     return next(
-      new AppError('Invalid or expired verification token.', 400)
+      new AppError(ERRORS.INVALID_VERIFY_TOKEN, 400)
     );
   }
 
@@ -290,7 +298,7 @@ exports.resendVerification = catchAsync(async (req, res, next) => {
     user.emailVerificationExpires = undefined;
     await user.save({ validateBeforeSave: false });
     
-    return next(new AppError('Failed to send verification email. Try again later.', 500));
+    return next(new AppError(ERRORS.VERIFY_EMAIL_FAILED, 500));
   }
 
   res.status(200).json({
@@ -307,7 +315,7 @@ exports.refreshToken = catchAsync(async (req, res, next) => {
   const token = req.cookies?.refreshToken;
   
   if (!token) {
-    return next(new AppError('No refresh token provided.', 401));
+    return next(new AppError(ERRORS.NO_REFRESH_TOKEN, 401));
   }
 
   // Verify refresh token
@@ -315,18 +323,18 @@ exports.refreshToken = catchAsync(async (req, res, next) => {
   try {
     decoded = verifyRefreshToken(token);
   } catch (err) {
-    return next(new AppError('Invalid or expired refresh token.', 401));
+    return next(new AppError(ERRORS.INVALID_REFRESH_TOKEN, 401));
   }
 
   // Find user and verify stored refresh token
   const user = await User.findById(decoded.id).select('+refreshToken');
   
   if (!user) {
-    return next(new AppError('User no longer exists.', 401));
+    return next(new AppError(ERRORS.USER_NOT_EXISTS, 401));
   }
 
   if (!user.refreshToken) {
-    return next(new AppError('Please log in again.', 401));
+    return next(new AppError(ERRORS.RELOGIN_REQUIRED, 401));
   }
 
   // Compare hashed tokens
@@ -335,7 +343,7 @@ exports.refreshToken = catchAsync(async (req, res, next) => {
     // Possible token reuse attack - invalidate all tokens
     await User.findByIdAndUpdate(user._id, { refreshToken: null });
     logger.warn(`Security: Refresh token mismatch for user ${user.email} - possible token reuse`);
-    return next(new AppError('Invalid refresh token. Please log in again.', 401));
+    return next(new AppError(ERRORS.TOKEN_REUSE, 401));
   }
 
   // Check if user is still active
@@ -417,7 +425,7 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
   await user.save();
 
   // Send confirmation email
-  sendPasswordChangedEmail(user).catch(() => {});
+  sendPasswordChangedEmail(user).catch((err) => logger.error('Email send failed:', err.message));
 
   logger.info(`Password reset completed for ${user.email}`);
 
@@ -440,13 +448,13 @@ exports.changePassword = catchAsync(async (req, res, next) => {
   // Verify current password
   const isCurrentPasswordValid = await user.comparePassword(currentPassword);
   if (!isCurrentPasswordValid) {
-    return next(new AppError('Current password is incorrect.', 401));
+    return next(new AppError(ERRORS.CURRENT_PASSWORD_WRONG, 401));
   }
 
   // Prevent using same password
   const isSamePassword = await user.comparePassword(newPassword);
   if (isSamePassword) {
-    return next(new AppError('New password must be different from current password.', 400));
+    return next(new AppError(ERRORS.SAME_PASSWORD, 400));
   }
 
   // Update password
@@ -460,7 +468,7 @@ exports.changePassword = catchAsync(async (req, res, next) => {
   });
 
   // Send notification email
-  sendPasswordChangedEmail(user).catch(() => {});
+  sendPasswordChangedEmail(user).catch((err) => logger.error('Email send failed:', err.message));
 
   logger.info(`Password changed for ${user.email}`);
 });
@@ -532,7 +540,7 @@ exports.getMe = catchAsync(async (req, res) => {
  * Update user profile
  */
 exports.updateProfile = catchAsync(async (req, res) => {
-  const allowedFields = ['name', 'phone', 'organizationName', 'location', 'address'];
+  const allowedFields = ['name', 'phone', 'organizationName', 'location', 'address', 'city', 'state', 'country', 'citySlug', 'stateCode', 'regionCode'];
   const updates = {};
 
   for (const field of allowedFields) {

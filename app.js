@@ -7,6 +7,7 @@ const mongoSanitize = require('express-mongo-sanitize');
 const cookieParser = require('cookie-parser');
 
 const env = require('./config/env');
+const requestId = require('./middleware/requestId');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
 const AppError = require('./utils/AppError');
@@ -18,6 +19,8 @@ const donationRoutes = require('./routes/donation.routes');
 const adminRoutes = require('./routes/admin.routes');
 const notificationRoutes = require('./routes/notification.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
+const locationRoutes = require('./routes/location.routes');
+const configRoutes = require('./routes/config.routes');
 
 // ── Express app ────────────────────────────────────
 const app = express();
@@ -26,6 +29,9 @@ const app = express();
 
 // Security headers
 app.use(helmet());
+
+// Request correlation IDs for log tracing
+app.use(requestId);
 
 // Gzip/Brotli compression for all responses
 app.use(compression());
@@ -94,6 +100,8 @@ app.use('/api/v1/donations', donationRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
+app.use('/api/v1/location', locationRoutes);
+app.use('/api/v1/config', configRoutes);
 
 // ── 404 handler ────────────────────────────────────
 app.all('*', (req, _res, next) => {

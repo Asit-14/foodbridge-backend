@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { PICKUP_STATUSES } = require('../utils/constants');
 
 const pickupLogSchema = new mongoose.Schema(
   {
@@ -56,7 +57,7 @@ const pickupLogSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['in_progress', 'picked_up', 'delivered', 'failed'],
+      enum: PICKUP_STATUSES,
       default: 'in_progress',
       index: true,
     },
