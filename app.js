@@ -46,6 +46,7 @@ const allowedOrigins = [
   env.client.url.replace(/\/+$/, ''),
   ...(process.env.EXTRA_ORIGINS || '').split(',').map(o => o.trim().replace(/\/+$/, '')).filter(Boolean),
 ];
+logger.info(`[CORS] Allowed origins: ${allowedOrigins.join(', ')}`);
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -57,7 +58,10 @@ app.use(
       }
 
       logger.warn(`CORS blocked request from origin: ${origin} (allowed: ${allowedOrigins.join(', ')})`);
-      callback(new Error(`CORS: origin ${origin} not allowed`));
+      // Return false instead of an Error — this omits CORS headers (browser blocks it)
+      // without triggering the global error handler, which would strip CORS headers
+      // from the response and break OPTIONS preflight entirely.
+      callback(null, false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
