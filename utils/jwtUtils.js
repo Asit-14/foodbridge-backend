@@ -175,11 +175,16 @@ function getTokenExpiries() {
  */
 function getRefreshTokenCookieOptions() {
   const expiries = getTokenExpiries();
-  
+
+  // Cross-origin deployment (Vercel frontend ↔ Render backend) requires:
+  //   sameSite: 'none' — so the browser attaches cookies to cross-origin requests
+  //   secure: true     — mandatory when sameSite is 'none'
+  // Using 'strict' or 'lax' in production blocks cookies entirely because
+  // the frontend and backend are on different domains.
   return {
     httpOnly: true,
     secure: env.isProd,
-    sameSite: env.isProd ? 'strict' : 'lax',
+    sameSite: env.isProd ? 'none' : 'lax',
     maxAge: expiries.refreshToken,
     path: '/api/v1/auth',
   };

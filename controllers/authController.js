@@ -48,7 +48,7 @@ async function sendTokenResponse(user, statusCode, res, options = {}) {
 
   // Hash refresh token before storing in DB
   const hashedRefreshToken = hashRefreshToken(refreshToken);
-  await User.findByIdAndUpdate(user._id, { 
+  await User.findByIdAndUpdate(user._id, {
     refreshToken: hashedRefreshToken,
     // Reset login attempts on successful auth
     loginAttempts: 0,
@@ -56,7 +56,9 @@ async function sendTokenResponse(user, statusCode, res, options = {}) {
   });
 
   // Set refresh token as httpOnly cookie
-  res.cookie('refreshToken', refreshToken, getRefreshTokenCookieOptions());
+  const cookieOpts = getRefreshTokenCookieOptions();
+  logger.debug(`[DEBUG] Setting refreshToken cookie — options: ${JSON.stringify(cookieOpts)}`);
+  res.cookie('refreshToken', refreshToken, cookieOpts);
 
   // Prepare response data
   const responseData = {
@@ -70,6 +72,7 @@ async function sendTokenResponse(user, statusCode, res, options = {}) {
     responseData.message = options.message;
   }
 
+  logger.debug(`[DEBUG] sendTokenResponse — user=${user.email}, statusCode=${statusCode}, accessToken issued`);
   res.status(statusCode).json(responseData);
 }
 
@@ -80,6 +83,7 @@ async function sendTokenResponse(user, statusCode, res, options = {}) {
  * Register a new user with email verification
  */
 exports.register = catchAsync(async (req, res, next) => {
+  logger.debug(`[DEBUG] Register attempt — body keys: ${Object.keys(req.body).join(', ')}`);
   const {
     name,
     email,
@@ -167,6 +171,7 @@ exports.register = catchAsync(async (req, res, next) => {
  */
 exports.login = catchAsync(async (req, res, next) => {
   const { email, password } = req.body;
+  logger.debug(`[DEBUG] Login attempt — email=${email}, hasPassword=${!!password}`);
 
   // Fetch user with password and security fields
   const user = await User.findOne({ email }).select(
@@ -175,6 +180,7 @@ exports.login = catchAsync(async (req, res, next) => {
 
   // Check if user exists
   if (!user) {
+    logger.debug(`[DEBUG] Login failed — user not found for email=${email}`);
     return next(new AppError(ERRORS.INVALID_CREDENTIALS, 401));
   }
 
@@ -220,6 +226,7 @@ exports.login = catchAsync(async (req, res, next) => {
 
   // Check email verification (optional - can be made required)
   if (!user.isEmailVerified && env.isProd) {
+    logger.debug(`[DEBUG] Login blocked — email not verified for ${email}, isProd=${env.isProd}`);
     return next(
       new AppError(ERRORS.EMAIL_NOT_VERIFIED, 403)
     );
@@ -227,6 +234,7 @@ exports.login = catchAsync(async (req, res, next) => {
 
   // Successful login
   logger.info(`Login: Successful login for ${email}`);
+  logger.debug(`[DEBUG] Login success — issuing tokens for ${email}, role=${user.role}`);
   await sendTokenResponse(user, 200, res);
 });
 
@@ -313,8 +321,10 @@ exports.resendVerification = catchAsync(async (req, res, next) => {
  */
 exports.refreshToken = catchAsync(async (req, res, next) => {
   const token = req.cookies?.refreshToken;
-  
+  logger.debug(`[DEBUG] Refresh token attempt — cookie present: ${!!token}, cookies keys: ${Object.keys(req.cookies || {}).join(', ')}`);
+
   if (!token) {
+    logger.debug(`[DEBUG] Refresh failed — no refreshToken cookie. This usually means sameSite/secure cookie flags are wrong for cross-origin deployment.`);
     return next(new AppError(ERRORS.NO_REFRESH_TOKEN, 401));
   }
 
@@ -485,7 +495,7 @@ exports.logout = catchAsync(async (req, res) => {
   res.clearCookie('refreshToken', {
     httpOnly: true,
     secure: env.isProd,
-    sameSite: env.isProd ? 'strict' : 'lax',
+    sameSite: env.isProd ? 'none' : 'lax',
     path: '/api/v1/auth',
   });
 
@@ -512,7 +522,7 @@ exports.logoutAll = catchAsync(async (req, res) => {
   res.clearCookie('refreshToken', {
     httpOnly: true,
     secure: env.isProd,
-    sameSite: env.isProd ? 'strict' : 'lax',
+    sameSite: env.isProd ? 'none' : 'lax',
     path: '/api/v1/auth',
   });
 

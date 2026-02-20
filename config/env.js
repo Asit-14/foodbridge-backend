@@ -40,6 +40,16 @@ const env = {
     from: process.env.SMTP_FROM || process.env.SMTP_USER || '',
   },
 
+  sms: {
+    provider: process.env.SMS_PROVIDER || '',  // 'twilio' or 'fast2sms'
+    // Twilio
+    accountSid: process.env.TWILIO_ACCOUNT_SID || '',
+    authToken: process.env.TWILIO_AUTH_TOKEN || '',
+    fromNumber: process.env.TWILIO_FROM_NUMBER || '',
+    // Fast2SMS (India)
+    apiKey: process.env.FAST2SMS_API_KEY || '',
+  },
+
   get isDev() {
     return this.nodeEnv === 'development';
   },
@@ -67,6 +77,16 @@ if (env.jwt.secret.length < 32) {
 if (env.jwt.refreshSecret.length < 32) {
   console.error('FATAL: JWT_REFRESH_SECRET must be at least 32 characters.');
   process.exit(1);
+}
+
+// ── Warn about critical production misconfig ────
+if (env.isProd) {
+  if (env.client.url.includes('localhost')) {
+    console.error('WARNING: CLIENT_URL contains "localhost" in production mode. CORS will reject your frontend. Set CLIENT_URL to your Vercel domain (e.g. https://your-app.vercel.app)');
+  }
+  if (!env.smtp.host) {
+    console.error('WARNING: SMTP_HOST not set in production. Email verification is required for login but emails cannot be sent — users will be locked out.');
+  }
 }
 
 module.exports = env;

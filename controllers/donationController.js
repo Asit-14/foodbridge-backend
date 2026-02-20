@@ -8,6 +8,7 @@ const { findBestNGO } = require('../services/matchingService');
 const { notify, broadcast } = require('../services/notificationService');
 const { assessExpiryRisk } = require('../services/expiryRisk');
 const { sendDonationAcceptedEmail, sendOTPEmail, sendDeliveryConfirmationEmail } = require('../services/emailService');
+const { sendOTPviaSMS } = require('../services/smsService');
 const ERRORS = require('../utils/errorMessages');
 const logger = require('../utils/logger');
 const { STATUS, ROLE } = require('../utils/constants');
@@ -247,6 +248,8 @@ exports.acceptDonation = catchAsync(async (req, res, next) => {
   if (donor) {
     sendDonationAcceptedEmail(donor, req.user, donation).catch((err) => logger.error('Email send failed:', err.message));
     sendOTPEmail(donor, donation, pickupLog.pickupOTP).catch((err) => logger.error('Email send failed:', err.message));
+    // Also send OTP via SMS if donor has a phone number and SMS is configured
+    sendOTPviaSMS(donor.phone, pickupLog.pickupOTP).catch((err) => logger.error('SMS send failed:', err.message));
   }
 
   // Emit to donation room for any listeners

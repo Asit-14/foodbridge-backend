@@ -14,7 +14,7 @@ function initSocket(httpServer) {
 
   const io = new Server(httpServer, {
     cors: {
-      origin: env.client.url,
+      origin: env.client.url.replace(/\/+$/, ''),
       methods: ['GET', 'POST'],
       credentials: true,
     },

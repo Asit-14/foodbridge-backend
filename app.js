@@ -7,6 +7,7 @@ const mongoSanitize = require('express-mongo-sanitize');
 const cookieParser = require('cookie-parser');
 
 const env = require('./config/env');
+const logger = require('./utils/logger');
 const requestId = require('./middleware/requestId');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
@@ -25,6 +26,9 @@ const configRoutes = require('./routes/config.routes');
 // ── Express app ────────────────────────────────────
 const app = express();
 
+// ── Startup debug info ───────────────────────────
+logger.info(`[DEBUG] App starting — NODE_ENV=${env.nodeEnv}, isProd=${env.isProd}, CLIENT_URL=${env.client.url}, SMTP_HOST=${env.smtp.host || 'NOT SET'}`);
+
 // ── Global middleware ──────────────────────────────
 
 // Security headers
@@ -36,10 +40,21 @@ app.use(requestId);
 // Gzip/Brotli compression for all responses
 app.use(compression());
 
-// CORS
+// CORS — validate origin with logging for cross-origin debugging
+const allowedOrigin = env.client.url.replace(/\/+$/, ''); // strip trailing slash
 app.use(
   cors({
-    origin: env.client.url,
+    origin: function (origin, callback) {
+      // Allow requests with no origin (Postman, server-to-server, health checks)
+      if (!origin) return callback(null, true);
+
+      if (origin === allowedOrigin) {
+        return callback(null, true);
+      }
+
+      logger.warn(`CORS blocked request from origin: ${origin} (allowed: ${allowedOrigin})`);
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],

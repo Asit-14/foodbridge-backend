@@ -1,6 +1,7 @@
 const AppError = require('../utils/AppError');
 const User = require('../models/User');
 const { verifyAccessToken } = require('../utils/jwtUtils');
+const logger = require('../utils/logger');
 
 /**
  * ╔══════════════════════════════════════════════════════════════╗
@@ -31,6 +32,7 @@ const protect = async (req, _res, next) => {
     }
 
     if (!token) {
+      logger.debug(`[DEBUG] protect middleware — no Bearer token in Authorization header`);
       return next(new AppError('Authentication required. Please log in.', 401));
     }
 
@@ -39,6 +41,7 @@ const protect = async (req, _res, next) => {
     try {
       decoded = verifyAccessToken(token);
     } catch (err) {
+      logger.debug(`[DEBUG] protect middleware — token verification failed: ${err.name} — ${err.message}`);
       if (err.name === 'TokenExpiredError') {
         return next(new AppError('Token expired. Please refresh or log in again.', 401));
       }

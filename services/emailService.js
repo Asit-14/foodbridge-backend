@@ -91,12 +91,13 @@ function baseTemplate(title, body) {
 
 async function sendEmail({ to, subject, title, body }) {
   if (!transporter) {
-    logger.debug(`Email skipped (no SMTP): ${subject} → ${to}`);
+    logger.warn(`[DEBUG] Email SKIPPED (no SMTP transporter): "${subject}" → ${to}. Check SMTP_HOST, SMTP_USER, SMTP_PASS env vars.`);
     return false;
   }
 
   try {
     const html = baseTemplate(title || subject, body);
+    logger.debug(`[DEBUG] Sending email: "${subject}" → ${to}`);
     await transporter.sendMail({
       from: `"FoodBridge" <${env.smtp.from || env.smtp.user}>`,
       to,
@@ -106,7 +107,7 @@ async function sendEmail({ to, subject, title, body }) {
     logger.info(`Email sent: ${subject} → ${to}`);
     return true;
   } catch (err) {
-    logger.error(`Email failed: ${err.message}`);
+    logger.error(`[DEBUG] Email FAILED: "${subject}" → ${to} — ${err.message}`, { stack: err.stack });
     return false;
   }
 }
