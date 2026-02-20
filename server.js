@@ -38,13 +38,6 @@ start().catch((err) => {
   process.exit(1);
 });
 
-app.get("/", (req, res) => {
-  res.status(200).json({
-    status: "OK",
-    message: "FoodBridge Backend API is running 🚀"
-  });
-});
-
 // ── Graceful shutdown ──────────────────────────────
 function shutdown(signal) {
   logger.info(`${signal} received. Shutting down gracefully...`);

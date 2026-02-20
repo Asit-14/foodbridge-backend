@@ -103,6 +103,16 @@ app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/location', locationRoutes);
 app.use('/api/v1/config', configRoutes);
 
+// ── Root route (API info) ──────────────────────────
+app.get('/', (_req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    message: 'FoodBridge API is running',
+    version: 'v1',
+    docs: '/api/health',
+  });
+});
+
 // ── 404 handler ────────────────────────────────────
 app.all('*', (req, _res, next) => {
   next(new AppError(`Route ${req.originalUrl} not found`, 404));
