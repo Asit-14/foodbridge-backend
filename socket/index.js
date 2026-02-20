@@ -12,9 +12,14 @@ const notificationService = require('../services/notificationService');
 function initSocket(httpServer) {
   const { Server } = require('socket.io');
 
+  const allowedOrigins = [
+    env.client.url.replace(/\/+$/, ''),
+    ...(process.env.EXTRA_ORIGINS || '').split(',').map(o => o.trim().replace(/\/+$/, '')).filter(Boolean),
+  ];
+
   const io = new Server(httpServer, {
     cors: {
-      origin: env.client.url.replace(/\/+$/, ''),
+      origin: allowedOrigins,
       methods: ['GET', 'POST'],
       credentials: true,
     },

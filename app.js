@@ -41,18 +41,22 @@ app.use(requestId);
 app.use(compression());
 
 // CORS — validate origin with logging for cross-origin debugging
-const allowedOrigin = env.client.url.replace(/\/+$/, ''); // strip trailing slash
+// Supports multiple origins: CLIENT_URL + EXTRA_ORIGINS (comma-separated)
+const allowedOrigins = [
+  env.client.url.replace(/\/+$/, ''),
+  ...(process.env.EXTRA_ORIGINS || '').split(',').map(o => o.trim().replace(/\/+$/, '')).filter(Boolean),
+];
 app.use(
   cors({
     origin: function (origin, callback) {
       // Allow requests with no origin (Postman, server-to-server, health checks)
       if (!origin) return callback(null, true);
 
-      if (origin === allowedOrigin) {
+      if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
 
-      logger.warn(`CORS blocked request from origin: ${origin} (allowed: ${allowedOrigin})`);
+      logger.warn(`CORS blocked request from origin: ${origin} (allowed: ${allowedOrigins.join(', ')})`);
       callback(new Error(`CORS: origin ${origin} not allowed`));
     },
     credentials: true,

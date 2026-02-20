@@ -33,6 +33,8 @@ function initTransporter() {
       user: env.smtp.user,
       pass: env.smtp.pass,
     },
+    // Force IPv4 — Render has no IPv6 outbound, Gmail resolves to IPv6 first
+    family: 4,
   });
 
   transporter.verify()
