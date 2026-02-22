@@ -8,7 +8,10 @@ const env = require('./env');
 const connectDB = async () => {
   try {
     const conn = await mongoose.connect(env.mongo.uri, {
-      autoIndex: !env.isProd,
+      // autoIndex must stay true — the matching engine uses $nearSphere
+      // which requires 2dsphere indexes, and compound indexes are needed
+      // for efficient city/role queries. Without them queries fail silently.
+      autoIndex: true,
       maxPoolSize: env.isProd ? 50 : 10,
       minPoolSize: env.isProd ? 10 : 2,
       serverSelectionTimeoutMS: 5000,

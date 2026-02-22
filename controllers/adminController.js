@@ -508,8 +508,13 @@ exports.updateUserStatus = catchAsync(async (req, res) => {
     runValidators: true,
   });
 
+  if (!user) {
+    const AppError = require('../utils/AppError');
+    throw new AppError('User not found.', 404);
+  }
+
   // Send verification email to NGO when verified
-  if (isVerified === true && user && user.role === ROLE.NGO) {
+  if (isVerified === true && user.role === ROLE.NGO) {
     sendNGOVerifiedEmail(user).catch((err) => logger.error('Email send failed:', err.message));
   }
 

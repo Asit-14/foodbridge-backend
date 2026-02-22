@@ -13,6 +13,9 @@ const { apiLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
 const AppError = require('./utils/AppError');
 const { getStatus: getCronStatus } = require('./services/cronService');
+const { getSmtpStatus } = require('./services/emailService');
+const { getQueueMetrics } = require('./queues/emailQueue');
+const { isRedisAvailable } = require('./config/redis');
 
 // ── Route imports ──────────────────────────────────
 const authRoutes = require('./routes/auth.routes');
@@ -28,6 +31,13 @@ const app = express();
 
 // ── Startup debug info ───────────────────────────
 logger.info(`[DEBUG] App starting — NODE_ENV=${env.nodeEnv}, isProd=${env.isProd}, CLIENT_URL=${env.client.url}, SMTP_HOST=${env.smtp.host || 'NOT SET'}`);
+
+// ── Trust proxy (REQUIRED for Render / Vercel / any reverse-proxy host) ──
+// Without this:
+//   - req.ip returns the proxy IP → rate limiting treats ALL users as one
+//   - req.protocol is always 'http' → secure cookie logic can break
+//   - X-Forwarded-For header is ignored
+app.set('trust proxy', 1);
 
 // ── Global middleware ──────────────────────────────
 
@@ -65,7 +75,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-csrf-token'],
   })
 );
 
@@ -101,6 +111,12 @@ app.get('/api/health', async (_req, res) => {
     dbStatus = 'error';
   }
 
+  // Redis status
+  const redisUp = await isRedisAvailable().catch(() => false);
+
+  // Email queue metrics
+  const emailQueue = await getQueueMetrics();
+
   const uptimeSec = Math.floor(process.uptime());
   const mem = process.memoryUsage();
 
@@ -109,6 +125,9 @@ app.get('/api/health', async (_req, res) => {
     timestamp: new Date().toISOString(),
     uptime: `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m ${uptimeSec % 60}s`,
     database: dbStatus,
+    redis: redisUp ? 'connected' : 'disconnected',
+    smtp: getSmtpStatus(),
+    emailQueue,
     memory: {
       rss: `${Math.round(mem.rss / 1048576)}MB`,
       heapUsed: `${Math.round(mem.heapUsed / 1048576)}MB`,

@@ -368,10 +368,10 @@ exports.deliverDonation = catchAsync(async (req, res, next) => {
   donation.deliveredAt = new Date();
   await donation.save();
 
-  // Update NGO reliability score (simple increment for successful delivery)
-  await User.findByIdAndUpdate(req.user._id, {
-    $inc: { reliabilityScore: 2 },
-  });
+  // Update NGO reliability score (clamped to 0-100)
+  await User.findByIdAndUpdate(req.user._id, [
+    { $set: { reliabilityScore: { $min: [100, { $add: ['$reliabilityScore', 2] }] } } },
+  ]);
 
   // Notify donor
   await notify({

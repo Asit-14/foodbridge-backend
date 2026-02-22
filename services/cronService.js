@@ -197,11 +197,14 @@ registerJob('reassign-stale', '*/5 * * * *', async () => {
   }
 
   // Bulk update NGO reliability scores (avoids N+1 queries)
+  // Use $max/$min pipeline to clamp between 0-100 since $inc bypasses Mongoose validators
   if (ngoPenalties.size > 0) {
     const bulkOps = Array.from(ngoPenalties.entries()).map(([ngoId, penalty]) => ({
       updateOne: {
         filter: { _id: ngoId },
-        update: { $inc: { reliabilityScore: penalty } },
+        update: [
+          { $set: { reliabilityScore: { $max: [0, { $min: [100, { $add: ['$reliabilityScore', penalty] }] }] } } },
+        ],
       },
     }));
     await User.bulkWrite(bulkOps);

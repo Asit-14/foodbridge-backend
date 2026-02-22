@@ -7,8 +7,10 @@ module.exports = Object.freeze({
   EMAIL_NOT_VERIFIED: 'Please verify your email address before logging in.',
   ADMIN_SELF_REGISTER: 'Admin accounts cannot be self-registered.',
   EMAIL_EXISTS: 'An account with this email already exists.',
-  INVALID_RESET_TOKEN: 'Invalid or expired password reset token.',
-  INVALID_VERIFY_TOKEN: 'Invalid or expired verification token.',
+  INVALID_RESET_TOKEN: 'Invalid or already used password reset token.',
+  EXPIRED_RESET_TOKEN: 'Password reset link has expired. Please request a new one.',
+  INVALID_VERIFY_TOKEN: 'Invalid or already used verification token.',
+  EXPIRED_VERIFY_TOKEN: 'Verification link has expired. Please request a new one.',
   NO_REFRESH_TOKEN: 'No refresh token provided.',
   INVALID_REFRESH_TOKEN: 'Invalid or expired refresh token.',
   RELOGIN_REQUIRED: 'Please log in again.',
@@ -16,6 +18,8 @@ module.exports = Object.freeze({
   CURRENT_PASSWORD_WRONG: 'Current password is incorrect.',
   SAME_PASSWORD: 'New password must be different from current password.',
   TOKEN_REUSE: 'Invalid refresh token. Please log in again.',
+  CSRF_MISSING: 'CSRF token missing. Please refresh and try again.',
+  CSRF_INVALID: 'Invalid CSRF token.',
 
   // ── Donations ──
   DONATION_NOT_FOUND: 'Donation not found.',

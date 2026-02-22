@@ -32,6 +32,10 @@ const env = {
     max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,
   },
 
+  redis: {
+    url: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+  },
+
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: parseInt(process.env.SMTP_PORT, 10) || 587,
@@ -55,6 +59,9 @@ const env = {
   },
   get isProd() {
     return this.nodeEnv === 'production';
+  },
+  get isTest() {
+    return this.nodeEnv === 'test';
   },
 };
 

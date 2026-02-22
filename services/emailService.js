@@ -1,23 +1,24 @@
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 const env = require('../config/env');
+const { enqueueEmail, isQueueAvailable } = require('../queues/emailQueue');
 
 /**
  * ╔══════════════════════════════════════════════════════════════╗
  * ║           EMAIL NOTIFICATION SERVICE (SMTP)                  ║
  * ║                                                              ║
- * ║  Sends transactional emails for critical events:             ║
- * ║    - Donation accepted / picked up / delivered               ║
- * ║    - OTP for pickup verification                             ║
- * ║    - New donation alert to NGOs                              ║
- * ║    - Expiry warnings                                         ║
- * ║    - Welcome email on registration                           ║
+ * ║  High-performance email delivery with:                       ║
+ * ║  - SMTP connection pooling (pool: true, maxConnections: 5)   ║
+ * ║  - BullMQ queue integration for async delivery               ║
+ * ║  - Automatic fallback to direct SMTP when Redis unavailable  ║
+ * ║  - Singleton transporter (reused across all requests)        ║
  * ║                                                              ║
- * ║  Falls back silently if SMTP is not configured.              ║
+ * ║  Priority: Queue (async) → Direct SMTP (sync fallback)       ║
  * ╚══════════════════════════════════════════════════════════════╝
  */
 
 let transporter = null;
+let smtpReady = false;
 
 function initTransporter() {
   if (!env.smtp || !env.smtp.host) {
@@ -33,17 +34,39 @@ function initTransporter() {
       user: env.smtp.user,
       pass: env.smtp.pass,
     },
+    // Connection pooling — reuses TCP connections across sendMail calls
+    pool: true,
+    maxConnections: 5,
+    maxMessages: 100,    // Send up to 100 emails per connection before reconnecting
     // Force IPv4 — Render has no IPv6 outbound, Gmail resolves to IPv6 first
     family: 4,
+    // Timeouts to prevent hanging connections
+    connectionTimeout: 10000,  // 10s to establish connection
+    greetingTimeout: 10000,    // 10s for SMTP greeting
+    socketTimeout: 30000,      // 30s for socket inactivity
   });
 
   transporter.verify()
-    .then(() => logger.info('SMTP transporter verified and ready'))
-    .catch((err) => logger.error(`SMTP verification failed: ${err.message}`));
+    .then(() => {
+      smtpReady = true;
+      logger.info('SMTP transporter verified and ready (pooled, maxConn=5)');
+    })
+    .catch((err) => {
+      smtpReady = false;
+      logger.error(`SMTP verification failed: ${err.message}`);
+    });
 }
 
 // Initialize on module load
 initTransporter();
+
+/**
+ * Get SMTP health status for the health check endpoint.
+ */
+function getSmtpStatus() {
+  if (!transporter) return 'not_configured';
+  return smtpReady ? 'ready' : 'failed';
+}
 
 // ── Email templates ──────────────────────────────────
 
@@ -89,34 +112,44 @@ function baseTemplate(title, body) {
 </html>`;
 }
 
-// ── Send function ───────────────────────────────────
+// ── Core send function (direct SMTP) ──────────────────
 
 async function sendEmail({ to, subject, title, body }) {
   if (!transporter) {
-    logger.warn(`[DEBUG] Email SKIPPED (no SMTP transporter): "${subject}" → ${to}. Check SMTP_HOST, SMTP_USER, SMTP_PASS env vars.`);
+    logger.warn(`Email SKIPPED (no SMTP transporter): "${subject}" → ${to}. Check SMTP_HOST, SMTP_USER, SMTP_PASS env vars.`);
     return false;
   }
 
   try {
     const html = baseTemplate(title || subject, body);
-    logger.debug(`[DEBUG] Sending email: "${subject}" → ${to}`);
+    const start = Date.now();
     await transporter.sendMail({
       from: `"FoodBridge" <${env.smtp.from || env.smtp.user}>`,
       to,
       subject,
       html,
     });
-    logger.info(`Email sent: ${subject} → ${to}`);
+    const elapsed = Date.now() - start;
+    logger.info(`Email sent: ${subject} → ${to} (${elapsed}ms)`);
     return true;
   } catch (err) {
-    logger.error(`[DEBUG] Email FAILED: "${subject}" → ${to} — ${err.message}`, { stack: err.stack });
+    logger.error(`Email FAILED: "${subject}" → ${to} — ${err.message}`, { stack: err.stack });
     return false;
   }
 }
 
-// ── Pre-built email functions ─────────────────────────
+// ── Queue-aware email functions ────────────────────────
+// Each function tries the queue first, falls back to direct SMTP.
 
 async function sendWelcomeEmail(user) {
+  const queued = await enqueueEmail('welcome', {
+    to: user.email,
+    name: user.name,
+    role: user.role,
+  });
+  if (queued) return true;
+
+  // Direct SMTP fallback
   return sendEmail({
     to: user.email,
     subject: 'Welcome to FoodBridge!',
@@ -230,6 +263,14 @@ async function sendNGOVerifiedEmail(ngo) {
 }
 
 async function sendEmailVerification(user, verificationUrl) {
+  const queued = await enqueueEmail('verification', {
+    to: user.email,
+    name: user.name,
+    verificationUrl,
+  });
+  if (queued) return true;
+
+  // Direct SMTP fallback
   return sendEmail({
     to: user.email,
     subject: 'Verify Your Email — FoodBridge',
@@ -243,7 +284,7 @@ async function sendEmailVerification(user, verificationUrl) {
       <p class="meta">Or copy and paste this link into your browser:</p>
       <p class="meta" style="word-break: break-all;">${verificationUrl}</p>
       <div class="highlight" style="background:#fef3c7; border-color:#fcd34d;">
-        <p><strong>⏰ This link expires in 24 hours.</strong></p>
+        <p><strong>⏰ This link expires in 15 minutes.</strong></p>
         <p>If you didn't create an account, you can safely ignore this email.</p>
       </div>
     `,
@@ -251,6 +292,14 @@ async function sendEmailVerification(user, verificationUrl) {
 }
 
 async function sendPasswordResetEmail(user, resetUrl) {
+  const queued = await enqueueEmail('passwordReset', {
+    to: user.email,
+    name: user.name,
+    resetUrl,
+  });
+  if (queued) return true;
+
+  // Direct SMTP fallback
   return sendEmail({
     to: user.email,
     subject: 'Reset Your Password — FoodBridge',
@@ -264,7 +313,7 @@ async function sendPasswordResetEmail(user, resetUrl) {
       <p class="meta">Or copy and paste this link into your browser:</p>
       <p class="meta" style="word-break: break-all;">${resetUrl}</p>
       <div class="highlight" style="background:#fef2f2; border-color:#fecaca;">
-        <p><strong>⏰ This link expires in 1 hour.</strong></p>
+        <p><strong>⏰ This link expires in 15 minutes.</strong></p>
         <p>If you didn't request a password reset, please ignore this email or contact support if you have concerns.</p>
       </div>
     `,
@@ -272,6 +321,13 @@ async function sendPasswordResetEmail(user, resetUrl) {
 }
 
 async function sendPasswordChangedEmail(user) {
+  const queued = await enqueueEmail('passwordChanged', {
+    to: user.email,
+    name: user.name,
+  });
+  if (queued) return true;
+
+  // Direct SMTP fallback
   return sendEmail({
     to: user.email,
     subject: 'Password Changed — FoodBridge',
@@ -291,6 +347,13 @@ async function sendPasswordChangedEmail(user) {
 }
 
 async function sendAccountLockedEmail(user) {
+  const queued = await enqueueEmail('accountLocked', {
+    to: user.email,
+    name: user.name,
+  });
+  if (queued) return true;
+
+  // Direct SMTP fallback
   return sendEmail({
     to: user.email,
     subject: 'Account Security Alert — FoodBridge',
@@ -299,7 +362,7 @@ async function sendAccountLockedEmail(user) {
       <p>Hi ${user.name},</p>
       <p>We detected multiple failed login attempts on your account. For your security, we've temporarily locked your account.</p>
       <div class="highlight" style="background:#fef2f2; border-color:#fecaca;">
-        <p><strong>Your account will be automatically unlocked in 2 hours.</strong></p>
+        <p><strong>Your account will be automatically unlocked in 30 minutes.</strong></p>
       </div>
       <p>If this was you, please wait and try again later. If you've forgotten your password, you can reset it.</p>
       <p>If you didn't attempt to log in, someone else may be trying to access your account. We recommend resetting your password.</p>
@@ -320,4 +383,5 @@ module.exports = {
   sendPasswordResetEmail,
   sendPasswordChangedEmail,
   sendAccountLockedEmail,
+  getSmtpStatus,
 };

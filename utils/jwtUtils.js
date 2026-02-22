@@ -12,13 +12,16 @@ const env = require('../config/env');
  * ║                                                              ║
  * ║  Security features:                                          ║
  * ║  - Separate secrets for access/refresh tokens                ║
+ * ║  - Algorithm pinned to HS256 (prevents confusion attacks)    ║
  * ║  - Token ID (jti) for revocation capability                  ║
+ * ║  - tokenVersion for forced invalidation                      ║
  * ║  - Issuer and audience claims for validation                 ║
  * ╚══════════════════════════════════════════════════════════════╝
  */
 
 const TOKEN_ISSUER = 'foodbridge-api';
 const TOKEN_AUDIENCE = 'foodbridge-client';
+const ALGORITHM = 'HS256';
 
 /**
  * Generate a unique token ID for tracking/revocation
@@ -36,11 +39,12 @@ function signAccessToken(user) {
   const payload = {
     id: user._id,
     role: user.role,
-    email: user.email,
+    tokenVersion: user.tokenVersion || 0,
     jti: generateTokenId(),
   };
 
   return jwt.sign(payload, env.jwt.secret, {
+    algorithm: ALGORITHM,
     expiresIn: env.jwt.expiresIn || '15m',
     issuer: TOKEN_ISSUER,
     audience: TOKEN_AUDIENCE,
@@ -58,9 +62,11 @@ function signRefreshToken(user) {
     id: user._id,
     jti: generateTokenId(),
     type: 'refresh',
+    tokenVersion: user.tokenVersion || 0,
   };
 
   return jwt.sign(payload, env.jwt.refreshSecret, {
+    algorithm: ALGORITHM,
     expiresIn: env.jwt.refreshExpiresIn || '7d',
     issuer: TOKEN_ISSUER,
     audience: TOKEN_AUDIENCE,
@@ -76,6 +82,7 @@ function signRefreshToken(user) {
  */
 function verifyAccessToken(token) {
   return jwt.verify(token, env.jwt.secret, {
+    algorithms: [ALGORITHM],
     issuer: TOKEN_ISSUER,
     audience: TOKEN_AUDIENCE,
   });
@@ -89,6 +96,7 @@ function verifyAccessToken(token) {
  */
 function verifyRefreshToken(token) {
   const decoded = jwt.verify(token, env.jwt.refreshSecret, {
+    algorithms: [ALGORITHM],
     issuer: TOKEN_ISSUER,
     audience: TOKEN_AUDIENCE,
   });
@@ -129,16 +137,21 @@ function hashRefreshToken(token) {
 
 /**
  * Compare a plain token against a hashed version
+ * Uses timing-safe comparison to prevent timing attacks
  * @param {string} plainToken - Plain refresh token
  * @param {string} hashedToken - Hashed token from database
  * @returns {boolean} Whether tokens match
  */
 function compareRefreshToken(plainToken, hashedToken) {
   const hash = hashRefreshToken(plainToken);
-  return crypto.timingSafeEqual(
-    Buffer.from(hash),
-    Buffer.from(hashedToken)
-  );
+  const hashBuf = Buffer.from(hash);
+  const storedBuf = Buffer.from(hashedToken);
+
+  if (hashBuf.length !== storedBuf.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(hashBuf, storedBuf);
 }
 
 /**
@@ -176,11 +189,6 @@ function getTokenExpiries() {
 function getRefreshTokenCookieOptions() {
   const expiries = getTokenExpiries();
 
-  // Cross-origin deployment (Vercel frontend ↔ Render backend) requires:
-  //   sameSite: 'none' — so the browser attaches cookies to cross-origin requests
-  //   secure: true     — mandatory when sameSite is 'none'
-  // Using 'strict' or 'lax' in production blocks cookies entirely because
-  // the frontend and backend are on different domains.
   return {
     httpOnly: true,
     secure: env.isProd,

@@ -65,12 +65,11 @@ const errorHandler = (err, req, res, _next) => {
     });
   }
 
-  // Mongoose duplicate key
+  // Mongoose duplicate key — generic message to prevent field name leakage
   if (err.code === 11000) {
-    const field = Object.keys(err.keyValue).join(', ');
     return res.status(409).json({
       status: 'fail',
-      message: `Duplicate value for field: ${field}. Please use another value.`,
+      message: 'A record with this value already exists.',
     });
   }
 

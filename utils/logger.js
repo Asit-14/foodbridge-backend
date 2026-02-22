@@ -1,10 +1,11 @@
 const { createLogger, format, transports } = require('winston');
 const env = require('../config/env');
 
+// Production: console-only (Render/Railway/Fly have ephemeral filesystems —
+// file transports waste I/O and logs are lost on every deploy/restart).
+// Platform log aggregation captures stdout/stderr automatically.
 const prodTransports = [
   new transports.Console(),
-  new transports.File({ filename: 'logs/error.log', level: 'error', maxsize: 5242880, maxFiles: 5 }),
-  new transports.File({ filename: 'logs/combined.log', maxsize: 5242880, maxFiles: 5 }),
 ];
 
 const devTransports = [new transports.Console()];
