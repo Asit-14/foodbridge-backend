@@ -3,7 +3,6 @@ const { query, param } = require('express-validator');
 const validate = require('../middleware/validate');
 const { protect } = require('../middleware/auth');
 const authorize = require('../middleware/role');
-const { csrfProtection } = require('../middleware/csrf');
 const ctrl = require('../controllers/adminController');
 
 const router = Router();
@@ -32,7 +31,6 @@ router.get('/analytics/city-leaderboard', ctrl.getCityLeaderboard);
 router.get('/users', ctrl.getUsers);
 router.put(
   '/users/:id/status',
-  csrfProtection,
   [param('id').isMongoId().withMessage('Invalid user ID')],
   validate,
   ctrl.updateUserStatus

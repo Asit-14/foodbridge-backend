@@ -231,55 +231,6 @@ registerJob('reliability-recalc', '0 0 * * *', async () => {
 }, { timeoutMs: 5 * 60 * 1000 });
 
 // ═══════════════════════════════════════════════════════
-//  JOB D — Clean expired password-reset & email-verification
-//          tokens (every hour)
-//
-//  Removes token values from User documents where the
-//  expiry date has passed. This is a data-hygiene task —
-//  the tokens are already invalid (queries check expiry),
-//  but clearing them reduces document size and avoids
-//  stale data in DB snapshots.
-// ═══════════════════════════════════════════════════════
-
-registerJob('clean-expired-tokens', '0 * * * *', async () => {
-  const now = new Date();
-
-  // Clear expired password reset tokens
-  const resetResult = await User.updateMany(
-    {
-      passwordResetExpires: { $lt: now },
-      passwordResetToken: { $ne: null },
-    },
-    {
-      $unset: { passwordResetToken: 1, passwordResetExpires: 1 },
-    }
-  );
-
-  // Clear expired email verification tokens
-  const verifyResult = await User.updateMany(
-    {
-      emailVerificationExpires: { $lt: now },
-      emailVerificationToken: { $ne: null },
-      isEmailVerified: false,
-    },
-    {
-      $unset: { emailVerificationToken: 1, emailVerificationExpires: 1 },
-    }
-  );
-
-  const total = resetResult.modifiedCount + verifyResult.modifiedCount;
-  if (total > 0) {
-    logger.info(
-      `Cron [clean-expired-tokens]: cleared ${resetResult.modifiedCount} reset + ${verifyResult.modifiedCount} verification tokens`
-    );
-  }
-  return {
-    resetTokensCleared: resetResult.modifiedCount,
-    verificationTokensCleared: verifyResult.modifiedCount,
-  };
-});
-
-// ═══════════════════════════════════════════════════════
 //  LIFECYCLE — start / stop / status
 // ═══════════════════════════════════════════════════════
 

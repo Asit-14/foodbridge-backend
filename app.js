@@ -11,7 +11,7 @@ const logger = require('./utils/logger');
 const requestId = require('./middleware/requestId');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
-const AppError = require('./utils/AppError');
+const { NotFoundError } = require('./utils/AppError');
 const { getStatus: getCronStatus } = require('./services/cronService');
 const { getSmtpStatus } = require('./services/emailService');
 const { getQueueMetrics } = require('./queues/emailQueue');
@@ -75,7 +75,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-csrf-token'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
 
@@ -157,7 +157,7 @@ app.get('/', (_req, res) => {
 
 // ── 404 handler ────────────────────────────────────
 app.all('*', (req, _res, next) => {
-  next(new AppError(`Route ${req.originalUrl} not found`, 404));
+  next(new NotFoundError(`Route ${req.originalUrl} not found`));
 });
 
 // ── Global error handler (must be last) ────────────

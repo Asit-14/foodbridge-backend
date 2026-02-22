@@ -18,9 +18,7 @@ const env = {
 
   jwt: {
     secret: process.env.JWT_SECRET,
-    expiresIn: process.env.JWT_EXPIRES_IN || '15m',
-    refreshSecret: process.env.JWT_REFRESH_SECRET,
-    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+    expiresIn: process.env.JWT_EXPIRES_IN || '1h',
   },
 
   client: {
@@ -45,12 +43,10 @@ const env = {
   },
 
   sms: {
-    provider: process.env.SMS_PROVIDER || '',  // 'twilio' or 'fast2sms'
-    // Twilio
+    provider: process.env.SMS_PROVIDER || '',
     accountSid: process.env.TWILIO_ACCOUNT_SID || '',
     authToken: process.env.TWILIO_AUTH_TOKEN || '',
     fromNumber: process.env.TWILIO_FROM_NUMBER || '',
-    // Fast2SMS (India)
     apiKey: process.env.FAST2SMS_API_KEY || '',
   },
 
@@ -66,7 +62,7 @@ const env = {
 };
 
 // ── Validate critical vars at startup ──────────────
-const required = ['mongo.uri', 'jwt.secret', 'jwt.refreshSecret'];
+const required = ['mongo.uri', 'jwt.secret'];
 
 for (const key of required) {
   const value = key.split('.').reduce((o, k) => o?.[k], env);
@@ -81,18 +77,11 @@ if (env.jwt.secret.length < 32) {
   console.error('FATAL: JWT_SECRET must be at least 32 characters. Generate with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
   process.exit(1);
 }
-if (env.jwt.refreshSecret.length < 32) {
-  console.error('FATAL: JWT_REFRESH_SECRET must be at least 32 characters.');
-  process.exit(1);
-}
 
 // ── Warn about critical production misconfig ────
 if (env.isProd) {
   if (env.client.url.includes('localhost')) {
     console.error('WARNING: CLIENT_URL contains "localhost" in production mode. CORS will reject your frontend. Set CLIENT_URL to your Vercel domain (e.g. https://your-app.vercel.app)');
-  }
-  if (!env.smtp.host) {
-    console.error('WARNING: SMTP_HOST not set in production. Email verification is required for login but emails cannot be sent — users will be locked out.');
   }
 }
 

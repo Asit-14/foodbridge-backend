@@ -9,9 +9,6 @@ const logger = require('../utils/logger');
  * ║  Enqueues email jobs for async processing by the worker.     ║
  * ║  Falls back to direct SMTP if Redis is unavailable.          ║
  * ║                                                              ║
- * ║  Job types: verification, welcome, passwordReset,            ║
- * ║             passwordChanged, accountLocked                   ║
- * ║                                                              ║
  * ║  Retry: 3 attempts with exponential backoff (2^n seconds).   ║
  * ║  Dead-letter: Failed jobs kept for 7 days for inspection.    ║
  * ╚══════════════════════════════════════════════════════════════╝
@@ -73,33 +70,6 @@ async function initEmailQueue() {
 }
 
 /**
- * Enqueue an email job.
- *
- * @param {string} type - Email type (e.g. 'verification', 'welcome')
- * @param {Object} data - Email data (recipient, template vars, etc.)
- * @param {Object} [opts] - Optional BullMQ job options override
- * @returns {boolean} true if queued, false if fallback required
- */
-async function enqueueEmail(type, data, opts = {}) {
-  if (!emailQueue || !redisAvailable) {
-    return false; // Caller should use direct SMTP fallback
-  }
-
-  try {
-    const jobName = `email:${type}`;
-    await emailQueue.add(jobName, { type, ...data }, {
-      ...DEFAULT_JOB_OPTS,
-      ...opts,
-    });
-    logger.debug(`Email queued: ${jobName} → ${data.to || data.email}`);
-    return true;
-  } catch (err) {
-    logger.error(`Failed to enqueue email (${type}): ${err.message}`);
-    return false; // Caller should use direct SMTP fallback
-  }
-}
-
-/**
  * Get queue health metrics for the health check endpoint.
  */
 async function getQueueMetrics() {
@@ -137,17 +107,8 @@ async function closeEmailQueue() {
   }
 }
 
-/**
- * Check if queue-based email is available.
- */
-function isQueueAvailable() {
-  return redisAvailable && emailQueue !== null;
-}
-
 module.exports = {
   initEmailQueue,
-  enqueueEmail,
   getQueueMetrics,
   closeEmailQueue,
-  isQueueAvailable,
 };

@@ -509,8 +509,8 @@ exports.updateUserStatus = catchAsync(async (req, res) => {
   });
 
   if (!user) {
-    const AppError = require('../utils/AppError');
-    throw new AppError('User not found.', 404);
+    const { NotFoundError } = require('../utils/AppError');
+    throw new NotFoundError('User not found.');
   }
 
   // Send verification email to NGO when verified

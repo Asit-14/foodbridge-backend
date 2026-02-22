@@ -1,21 +1,6 @@
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 const env = require('../config/env');
-const { enqueueEmail, isQueueAvailable } = require('../queues/emailQueue');
-
-/**
- * ╔══════════════════════════════════════════════════════════════╗
- * ║           EMAIL NOTIFICATION SERVICE (SMTP)                  ║
- * ║                                                              ║
- * ║  High-performance email delivery with:                       ║
- * ║  - SMTP connection pooling (pool: true, maxConnections: 5)   ║
- * ║  - BullMQ queue integration for async delivery               ║
- * ║  - Automatic fallback to direct SMTP when Redis unavailable  ║
- * ║  - Singleton transporter (reused across all requests)        ║
- * ║                                                              ║
- * ║  Priority: Queue (async) → Direct SMTP (sync fallback)       ║
- * ╚══════════════════════════════════════════════════════════════╝
- */
 
 let transporter = null;
 let smtpReady = false;
@@ -34,16 +19,13 @@ function initTransporter() {
       user: env.smtp.user,
       pass: env.smtp.pass,
     },
-    // Connection pooling — reuses TCP connections across sendMail calls
     pool: true,
     maxConnections: 5,
-    maxMessages: 100,    // Send up to 100 emails per connection before reconnecting
-    // Force IPv4 — Render has no IPv6 outbound, Gmail resolves to IPv6 first
+    maxMessages: 100,
     family: 4,
-    // Timeouts to prevent hanging connections
-    connectionTimeout: 10000,  // 10s to establish connection
-    greetingTimeout: 10000,    // 10s for SMTP greeting
-    socketTimeout: 30000,      // 30s for socket inactivity
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 30000,
   });
 
   transporter.verify()
@@ -57,18 +39,14 @@ function initTransporter() {
     });
 }
 
-// Initialize on module load
 initTransporter();
 
-/**
- * Get SMTP health status for the health check endpoint.
- */
 function getSmtpStatus() {
   if (!transporter) return 'not_configured';
   return smtpReady ? 'ready' : 'failed';
 }
 
-// ── Email templates ──────────────────────────────────
+// ── Email template ──────────────────────────────────
 
 function baseTemplate(title, body) {
   return `
@@ -88,7 +66,6 @@ function baseTemplate(title, body) {
     .highlight { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 16px; margin: 16px 0; }
     .otp-box { text-align: center; padding: 20px; }
     .otp-code { font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #059669; background: #f0fdf4; border: 2px dashed #10b981; border-radius: 12px; padding: 16px 24px; display: inline-block; }
-    .btn { display: inline-block; background: #059669; color: #fff; text-decoration: none; padding: 12px 24px; border-radius: 10px; font-weight: 600; font-size: 14px; }
     .footer { padding: 20px 32px; text-align: center; color: #9ca3af; font-size: 12px; border-top: 1px solid #f3f4f6; }
     .meta { font-size: 13px; color: #6b7280; }
   </style>
@@ -112,11 +89,11 @@ function baseTemplate(title, body) {
 </html>`;
 }
 
-// ── Core send function (direct SMTP) ──────────────────
+// ── Core send function ──────────────────────────────
 
 async function sendEmail({ to, subject, title, body }) {
   if (!transporter) {
-    logger.warn(`Email SKIPPED (no SMTP transporter): "${subject}" → ${to}. Check SMTP_HOST, SMTP_USER, SMTP_PASS env vars.`);
+    logger.warn(`Email SKIPPED (no SMTP transporter): "${subject}" → ${to}.`);
     return false;
   }
 
@@ -138,32 +115,7 @@ async function sendEmail({ to, subject, title, body }) {
   }
 }
 
-// ── Queue-aware email functions ────────────────────────
-// Each function tries the queue first, falls back to direct SMTP.
-
-async function sendWelcomeEmail(user) {
-  const queued = await enqueueEmail('welcome', {
-    to: user.email,
-    name: user.name,
-    role: user.role,
-  });
-  if (queued) return true;
-
-  // Direct SMTP fallback
-  return sendEmail({
-    to: user.email,
-    subject: 'Welcome to FoodBridge!',
-    title: `Welcome, ${user.name}!`,
-    body: `
-      <p>Thank you for joining FoodBridge — the smart food waste reduction platform.</p>
-      <div class="highlight">
-        <p><strong>Your role:</strong> ${user.role === 'donor' ? 'Food Donor' : 'NGO Partner'}</p>
-        ${user.role === 'ngo' ? '<p>Your account will be verified by our admin team shortly. You\'ll receive a notification once approved.</p>' : '<p>You can start creating donations right away!</p>'}
-      </div>
-      <p>Together, we can reduce food waste and feed more people.</p>
-    `,
-  });
-}
+// ── Domain-specific email functions ─────────────────
 
 async function sendDonationAcceptedEmail(donor, ngo, donation) {
   return sendEmail({
@@ -215,38 +167,6 @@ async function sendDeliveryConfirmationEmail(donor, donation, beneficiaryCount) 
   });
 }
 
-async function sendExpiryWarningEmail(donor, donation) {
-  return sendEmail({
-    to: donor.email,
-    subject: `Expiry Warning: ${donation.foodType}`,
-    title: 'Your Donation is About to Expire',
-    body: `
-      <p>Your donation is approaching its expiry time and hasn't been picked up yet.</p>
-      <div class="highlight" style="background:#fef2f2; border-color:#fecaca;">
-        <p><strong>Food:</strong> ${donation.foodType}</p>
-        <p><strong>Expires:</strong> ${new Date(donation.expiryTime).toLocaleString()}</p>
-      </div>
-      <p>We're actively looking for an NGO to pick it up. You may also consider extending the pickup window if possible.</p>
-    `,
-  });
-}
-
-async function sendReassignmentEmail(donor, donation, attemptNumber) {
-  return sendEmail({
-    to: donor.email,
-    subject: `Donation Reassigned: ${donation.foodType}`,
-    title: 'Finding a New NGO',
-    body: `
-      <p>The previously assigned NGO didn't complete the pickup. We're reassigning your donation.</p>
-      <div class="highlight">
-        <p><strong>Food:</strong> ${donation.foodType}</p>
-        <p><strong>Reassignment attempt:</strong> ${attemptNumber} of 3</p>
-      </div>
-      <p>Our matching engine is finding the next best NGO for your donation.</p>
-    `,
-  });
-}
-
 async function sendNGOVerifiedEmail(ngo) {
   return sendEmail({
     to: ngo.email,
@@ -262,126 +182,11 @@ async function sendNGOVerifiedEmail(ngo) {
   });
 }
 
-async function sendEmailVerification(user, verificationUrl) {
-  const queued = await enqueueEmail('verification', {
-    to: user.email,
-    name: user.name,
-    verificationUrl,
-  });
-  if (queued) return true;
-
-  // Direct SMTP fallback
-  return sendEmail({
-    to: user.email,
-    subject: 'Verify Your Email — FoodBridge',
-    title: 'Verify Your Email Address',
-    body: `
-      <p>Hi ${user.name},</p>
-      <p>Thank you for registering with FoodBridge! Please verify your email address to activate your account.</p>
-      <div class="otp-box">
-        <a href="${verificationUrl}" class="btn" style="color: #fff !important; text-decoration: none;">Verify Email Address</a>
-      </div>
-      <p class="meta">Or copy and paste this link into your browser:</p>
-      <p class="meta" style="word-break: break-all;">${verificationUrl}</p>
-      <div class="highlight" style="background:#fef3c7; border-color:#fcd34d;">
-        <p><strong>⏰ This link expires in 15 minutes.</strong></p>
-        <p>If you didn't create an account, you can safely ignore this email.</p>
-      </div>
-    `,
-  });
-}
-
-async function sendPasswordResetEmail(user, resetUrl) {
-  const queued = await enqueueEmail('passwordReset', {
-    to: user.email,
-    name: user.name,
-    resetUrl,
-  });
-  if (queued) return true;
-
-  // Direct SMTP fallback
-  return sendEmail({
-    to: user.email,
-    subject: 'Reset Your Password — FoodBridge',
-    title: 'Password Reset Request',
-    body: `
-      <p>Hi ${user.name},</p>
-      <p>We received a request to reset your password. Click the button below to create a new password:</p>
-      <div class="otp-box">
-        <a href="${resetUrl}" class="btn" style="color: #fff !important; text-decoration: none;">Reset Password</a>
-      </div>
-      <p class="meta">Or copy and paste this link into your browser:</p>
-      <p class="meta" style="word-break: break-all;">${resetUrl}</p>
-      <div class="highlight" style="background:#fef2f2; border-color:#fecaca;">
-        <p><strong>⏰ This link expires in 15 minutes.</strong></p>
-        <p>If you didn't request a password reset, please ignore this email or contact support if you have concerns.</p>
-      </div>
-    `,
-  });
-}
-
-async function sendPasswordChangedEmail(user) {
-  const queued = await enqueueEmail('passwordChanged', {
-    to: user.email,
-    name: user.name,
-  });
-  if (queued) return true;
-
-  // Direct SMTP fallback
-  return sendEmail({
-    to: user.email,
-    subject: 'Password Changed — FoodBridge',
-    title: 'Your Password Has Been Changed',
-    body: `
-      <p>Hi ${user.name},</p>
-      <p>This is a confirmation that your password was recently changed.</p>
-      <div class="highlight">
-        <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
-      </div>
-      <div class="highlight" style="background:#fef2f2; border-color:#fecaca;">
-        <p><strong>⚠️ Didn't make this change?</strong></p>
-        <p>If you didn't change your password, please contact our support team immediately and reset your password.</p>
-      </div>
-    `,
-  });
-}
-
-async function sendAccountLockedEmail(user) {
-  const queued = await enqueueEmail('accountLocked', {
-    to: user.email,
-    name: user.name,
-  });
-  if (queued) return true;
-
-  // Direct SMTP fallback
-  return sendEmail({
-    to: user.email,
-    subject: 'Account Security Alert — FoodBridge',
-    title: 'Your Account Has Been Temporarily Locked',
-    body: `
-      <p>Hi ${user.name},</p>
-      <p>We detected multiple failed login attempts on your account. For your security, we've temporarily locked your account.</p>
-      <div class="highlight" style="background:#fef2f2; border-color:#fecaca;">
-        <p><strong>Your account will be automatically unlocked in 30 minutes.</strong></p>
-      </div>
-      <p>If this was you, please wait and try again later. If you've forgotten your password, you can reset it.</p>
-      <p>If you didn't attempt to log in, someone else may be trying to access your account. We recommend resetting your password.</p>
-    `,
-  });
-}
-
 module.exports = {
   sendEmail,
-  sendWelcomeEmail,
   sendDonationAcceptedEmail,
   sendOTPEmail,
   sendDeliveryConfirmationEmail,
-  sendExpiryWarningEmail,
-  sendReassignmentEmail,
   sendNGOVerifiedEmail,
-  sendEmailVerification,
-  sendPasswordResetEmail,
-  sendPasswordChangedEmail,
-  sendAccountLockedEmail,
   getSmtpStatus,
 };

@@ -5,15 +5,7 @@ const User = require('../models/User');
 const notificationService = require('../services/notificationService');
 
 /**
- * ╔══════════════════════════════════════════════════════════════╗
- * ║              SOCKET.IO INITIALIZATION                        ║
- * ║                                                              ║
- * ║  Hardened socket authentication with:                        ║
- * ║  - Full JWT verification (algorithm, issuer, audience)       ║
- * ║  - User existence and active status checks                   ║
- * ║  - tokenVersion validation                                   ║
- * ║  - Room-based broadcasting for notifications                 ║
- * ╚══════════════════════════════════════════════════════════════╝
+ * Socket.io initialization with JWT authentication.
  */
 
 /**
@@ -39,7 +31,7 @@ function initSocket(httpServer) {
     pingTimeout: 60000,
   });
 
-  // ── Auth middleware — full security validation ──────
+  // ── Auth middleware ──────────────────────────────────
   io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) {
@@ -47,11 +39,9 @@ function initSocket(httpServer) {
     }
 
     try {
-      // Use the same verifyAccessToken that enforces algorithm, issuer, audience
       const decoded = verifyAccessToken(token);
 
-      // Verify user exists and is active
-      const user = await User.findById(decoded.id);
+      const user = await User.findById(decoded.userId);
       if (!user) {
         return next(new Error('User not found'));
       }
@@ -60,17 +50,7 @@ function initSocket(httpServer) {
         return next(new Error('Account deactivated'));
       }
 
-      // Verify tokenVersion matches (catches forced revocations)
-      if ((decoded.tokenVersion || 0) !== (user.tokenVersion || 0)) {
-        return next(new Error('Token revoked'));
-      }
-
-      // Check password wasn't changed after token was issued
-      if (user.changedPasswordAfter(decoded.iat)) {
-        return next(new Error('Password changed'));
-      }
-
-      socket.userId = decoded.id;
+      socket.userId = decoded.userId;
       socket.userRole = decoded.role;
       next();
     } catch {
@@ -111,7 +91,7 @@ function initSocket(httpServer) {
   // Inject IO into notification service so it can emit events
   notificationService.setIO(io);
 
-  logger.info('Socket.io initialized with hardened JWT authentication');
+  logger.info('Socket.io initialized');
   return io;
 }
 

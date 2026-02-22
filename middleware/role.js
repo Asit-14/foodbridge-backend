@@ -1,21 +1,17 @@
-const AppError = require('../utils/AppError');
+const { AuthenticationError, AuthorizationError } = require('../utils/AppError');
 
 /**
  * Role-based access guard.
- * Pass allowed roles as arguments:
  *   router.get('/admin', protect, authorize('admin'), handler);
- *   router.get('/both', protect, authorize('donor', 'admin'), handler);
  */
 const authorize = (...roles) => {
   return (req, _res, next) => {
     if (!req.user) {
-      return next(new AppError('Authentication required before authorization.', 401));
+      return next(new AuthenticationError('Authentication required before authorization.'));
     }
 
     if (!roles.includes(req.user.role)) {
-      return next(
-        new AppError('You do not have permission to perform this action.', 403)
-      );
+      return next(new AuthorizationError('You do not have permission to perform this action.'));
     }
 
     next();

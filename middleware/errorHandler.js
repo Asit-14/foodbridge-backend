@@ -1,102 +1,121 @@
 const logger = require('../utils/logger');
 const env = require('../config/env');
+const {
+  BaseError,
+  ValidationError,
+  AuthenticationError,
+  ConflictError,
+} = require('../utils/AppError');
+
+const ERROR_BASE_URI = 'https://foodbridge.api/errors';
 
 /**
- * ╔══════════════════════════════════════════════════════════════╗
- * ║               GLOBAL ERROR HANDLER                           ║
- * ║                                                              ║
- * ║  Centralized error handling with:                            ║
- * ║  - Environment-aware responses (dev vs prod)                 ║
- * ║  - Error transformation for common issues                    ║
- * ║  - Security: Never leak stack traces in production           ║
- * ╚══════════════════════════════════════════════════════════════╝
+ * Build an RFC 7807 Problem Details response body.
  */
+function problemJson(req, { type, title, status, detail, errorCode, errors, retryAfter, stack }) {
+  const body = {
+    type,
+    title,
+    status,
+    detail,
+    instance: req.originalUrl,
+    errorCode,
+    requestId: req.id || 'unknown',
+  };
+
+  if (errors) body.errors = errors;
+  if (retryAfter) body.retryAfter = retryAfter;
+  if (env.isDev && stack) body.stack = stack;
+
+  return body;
+}
 
 /**
- * Global Express error handler.
+ * Global Express error handler (RFC 7807).
  * Must have 4 params so Express recognizes it as an error handler.
  */
 // eslint-disable-next-line no-unused-vars
 const errorHandler = (err, req, res, _next) => {
-  // Default values
-  err.statusCode = err.statusCode || 500;
-  err.status = err.status || 'error';
-
-  // ── Log with correlation ID ────────────────────────
   const reqId = req.id || 'unknown';
-  if (err.statusCode >= 500) {
-    logger.error(`[${reqId}] ${err.statusCode} — ${err.message}`, { stack: err.stack, requestId: reqId });
-  } else {
-    logger.warn(`[${reqId}] ${err.statusCode} — ${err.message}`, { requestId: reqId });
+
+  // ── Our own BaseError instances ─────────────────────
+  if (err instanceof BaseError) {
+    if (err.status >= 500) {
+      logger.error(`[${reqId}] ${err.status} — ${err.detail}`, { stack: err.stack, requestId: reqId });
+    } else {
+      logger.warn(`[${reqId}] ${err.status} — ${err.detail}`, { requestId: reqId });
+    }
+
+    return res.status(err.status).json(
+      problemJson(req, {
+        type: err.type,
+        title: err.title,
+        status: err.status,
+        detail: err.detail,
+        errorCode: err.errorCode,
+        errors: err.errors,
+        retryAfter: err.retryAfter,
+        stack: err.stack,
+      })
+    );
   }
 
-  // ── Development: send full error ─────────────────
-  if (env.isDev) {
-    return res.status(err.statusCode).json({
-      status: err.status,
-      message: err.message,
-      errors: err.errors || undefined,
-      stack: err.stack,
-    });
-  }
-
-  // ── Production: sanitize known errors ────────────
-
-  // JWT errors
+  // ── JWT errors ─────────────────────────────────────
   if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      status: 'fail',
-      message: 'Invalid token. Please log in again.',
-    });
+    logger.warn(`[${reqId}] 401 — Invalid token`, { requestId: reqId });
+    const mapped = new AuthenticationError('Invalid token. Please log in again.');
+    return res.status(401).json(problemJson(req, { ...mapped, stack: err.stack }));
   }
 
   if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      status: 'fail',
-      message: 'Token expired. Please log in again.',
-    });
+    logger.warn(`[${reqId}] 401 — Token expired`, { requestId: reqId });
+    const mapped = new AuthenticationError('Token expired. Please log in again.');
+    return res.status(401).json(problemJson(req, { ...mapped, stack: err.stack }));
   }
 
-  // Mongoose bad ObjectId
+  // ── Mongoose CastError (bad ObjectId) ──────────────
   if (err.name === 'CastError') {
-    return res.status(400).json({
-      status: 'fail',
-      message: `Invalid ${err.path}: ${err.value}`,
-    });
+    logger.warn(`[${reqId}] 400 — Invalid ${err.path}: ${err.value}`, { requestId: reqId });
+    const mapped = new ValidationError(`Invalid ${err.path}: ${err.value}`);
+    return res.status(400).json(problemJson(req, { ...mapped, stack: err.stack }));
   }
 
-  // Mongoose duplicate key — generic message to prevent field name leakage
+  // ── Mongoose duplicate key ─────────────────────────
   if (err.code === 11000) {
-    return res.status(409).json({
-      status: 'fail',
-      message: 'A record with this value already exists.',
-    });
+    logger.warn(`[${reqId}] 409 — Duplicate key`, { requestId: reqId });
+    const mapped = new ConflictError('A record with this value already exists.');
+    return res.status(409).json(problemJson(req, { ...mapped, stack: err.stack }));
   }
 
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
-    const messages = Object.values(err.errors).map((e) => e.message);
-    return res.status(400).json({
-      status: 'fail',
-      message: 'Validation failed',
-      errors: messages,
-    });
+  // ── Mongoose validation error ──────────────────────
+  if (err.name === 'ValidationError' && err.errors) {
+    const fieldErrors = Object.values(err.errors).map((e) => ({
+      field: e.path,
+      message: e.message,
+    }));
+    logger.warn(`[${reqId}] 400 — Mongoose validation failed`, { requestId: reqId });
+    const mapped = new ValidationError('Validation failed.', fieldErrors);
+    return res.status(400).json(problemJson(req, { ...mapped, stack: err.stack }));
   }
 
-  // Operational errors (our own AppError instances)
-  if (err.isOperational) {
-    return res.status(err.statusCode).json({
-      status: err.status,
-      message: err.message,
-      errors: err.errors || undefined,
-    });
+  // ── Unknown / programmer error ─────────────────────
+  const status = err.statusCode || err.status || 500;
+  if (status >= 500) {
+    logger.error(`[${reqId}] ${status} — ${err.message}`, { stack: err.stack, requestId: reqId });
+  } else {
+    logger.warn(`[${reqId}] ${status} — ${err.message}`, { requestId: reqId });
   }
 
-  // Unknown / programmer error — don't leak details
-  return res.status(500).json({
-    status: 'error',
-    message: 'Something went wrong. Please try again later.',
-  });
+  return res.status(status).json(
+    problemJson(req, {
+      type: `${ERROR_BASE_URI}/internal-error`,
+      title: 'Internal Server Error',
+      status,
+      detail: status >= 500 ? 'Something went wrong. Please try again later.' : err.message,
+      errorCode: 'INTERNAL_ERROR',
+      stack: err.stack,
+    })
+  );
 };
 
 module.exports = errorHandler;

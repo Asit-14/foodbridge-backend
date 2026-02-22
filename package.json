@@ -20,7 +20,6 @@
   "license": "MIT",
   "dependencies": {
     "bcrypt": "^6.0.0",
-    "bcryptjs": "^2.4.3",
     "bullmq": "^5.70.0",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
@@ -37,8 +36,6 @@
     "morgan": "^1.10.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^8.0.1",
-    "otplib": "^13.3.0",
-    "qrcode": "^1.5.4",
     "rate-limit-redis": "^4.3.1",
     "socket.io": "^4.7.2",
     "twilio": "^5.12.2",
