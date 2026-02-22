@@ -57,27 +57,29 @@ const allowedOrigins = [
   ...(process.env.EXTRA_ORIGINS || '').split(',').map(o => o.trim().replace(/\/+$/, '')).filter(Boolean),
 ];
 logger.info(`[CORS] Allowed origins: ${allowedOrigins.join(', ')}`);
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Allow requests with no origin (Postman, server-to-server, health checks)
-      if (!origin) return callback(null, true);
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (Postman, server-to-server, health checks)
+    if (!origin) return callback(null, true);
 
-      logger.warn(`CORS blocked request from origin: ${origin} (allowed: ${allowedOrigins.join(', ')})`);
-      // Return false instead of an Error — this omits CORS headers (browser blocks it)
-      // without triggering the global error handler, which would strip CORS headers
-      // from the response and break OPTIONS preflight entirely.
-      callback(null, false);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    logger.warn(`CORS blocked request from origin: ${origin} (allowed: ${allowedOrigins.join(', ')})`);
+    callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Retry-After'],
+  maxAge: 86400, // Cache preflight for 24h
+};
+
+// Handle preflight OPTIONS requests explicitly (before any other middleware)
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
 
 // Body parsers
 app.use(express.json({ limit: '10kb' }));
